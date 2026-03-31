@@ -9,7 +9,8 @@ async function startServer() {
 
   console.log(`[Server] Starting in ${envMode} mode...`);
 
-  // Vite middleware for development
+  // API routes are already in 'app'
+  
   if (!isProduction) {
     console.log("[Server] Loading Vite middleware...");
     const { createServer: createViteServer } = await import("vite");
@@ -20,17 +21,20 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.resolve(process.cwd(), "dist");
-    console.log(`[Server] Serving static files from: ${distPath}`);
+    const indexPath = path.resolve(distPath, "index.html");
     
+    console.log(`[Server] Production Mode: Serving from ${distPath}`);
+    
+    // Serve static files
     app.use(express.static(distPath));
     
-    // SPA fallback
+    // Catch-all route for SPA
     app.get("*", (req, res) => {
-      const indexPath = path.resolve(distPath, "index.html");
+      console.log(`[Server] Catch-all hit for: ${req.url}`);
       res.sendFile(indexPath, (err) => {
         if (err) {
           console.error(`[Server] Error sending index.html: ${err.message}`);
-          res.status(500).send("Error loading page, please ensure 'npm run build' was successful.");
+          res.status(500).send("Error loading index.html. Make sure 'npm run build' was run.");
         }
       });
     });

@@ -4,9 +4,10 @@ import app from "./src/server/app";
 
 async function startServer() {
   const PORT = 3000;
+  const isProduction = process.env.NODE_ENV?.trim() === "production";
 
   // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
+  if (!isProduction) {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },

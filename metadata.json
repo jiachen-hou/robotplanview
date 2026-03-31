@@ -1,0 +1,5 @@
+{
+  "name": "ShadowBot Schedule Dashboard",
+  "description": "A Gantt chart dashboard to visualize future schedule plans for Yingdao Robot (ShadowBot).",
+  "requestFramePermissions": []
+}

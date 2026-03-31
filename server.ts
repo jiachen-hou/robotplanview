@@ -9,8 +9,12 @@ async function startServer() {
 
   console.log(`[Server] Starting in ${envMode} mode...`);
 
-  // API routes are already in 'app'
-  
+  // Global Logger to see every request
+  app.use((req, res, next) => {
+    console.log(`[Request] ${req.method} ${req.url}`);
+    next();
+  });
+
   if (!isProduction) {
     console.log("[Server] Loading Vite middleware...");
     const { createServer: createViteServer } = await import("vite");
@@ -28,13 +32,18 @@ async function startServer() {
     // Serve static files
     app.use(express.static(distPath));
     
-    // Catch-all route for SPA
+    // Catch-all route for SPA - MUST be last
     app.get("*", (req, res) => {
-      console.log(`[Server] Catch-all hit for: ${req.url}`);
+      // Skip API routes
+      if (req.url.startsWith("/api/")) {
+        return res.status(404).json({ error: "API route not found" });
+      }
+      
+      console.log(`[Server] Serving index.html for: ${req.url}`);
       res.sendFile(indexPath, (err) => {
         if (err) {
           console.error(`[Server] Error sending index.html: ${err.message}`);
-          res.status(500).send("Error loading index.html. Make sure 'npm run build' was run.");
+          res.status(500).send("Error loading index.html. Please ensure 'npm run build' was successful.");
         }
       });
     });

@@ -58,6 +58,7 @@ interface ScheduleDetail extends ScheduleItem {
     name?: string;
   };
   averageDurationMins?: number;
+  historicalRuns?: any[];
 }
 
 interface RobotClient {
@@ -80,6 +81,10 @@ export interface ExtendedScheduleTask extends ScheduleTask {
   robotName?: string;
   robotNames?: string[];
   clientName?: string;
+  clientNames?: string[];
+  isHistorical?: boolean;
+  scheduleUuid?: string;
+  cronExpr?: string | null;
 }
 
 function getCronExpression(cronIf: CronInterface): string | null {
@@ -366,18 +371,45 @@ export default function App() {
       });
       
       const details: ScheduleDetail[] = [];
-      const batchSize = 10; // Reduced batch size to avoid rate limits
       const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-      const fetchWithRetry = async (url: string, data: any, maxRetries = 3): Promise<any> => {
+      // Task details cache to avoid repeated task/query calls
+      const getTaskDetailsCache = () => {
+        try {
+          const cached = localStorage.getItem('yingdao_task_details');
+          return cached ? JSON.parse(cached) : {};
+        } catch (e) { return {}; }
+      };
+      const saveTaskDetailsToCache = (uuid: string, data: any) => {
+        try {
+          const cache = getTaskDetailsCache();
+          cache[uuid] = data;
+          // Prune cache if it gets too large
+          const keys = Object.keys(cache);
+          if (keys.length > 1000) {
+             const keysToRemove = keys.slice(0, keys.length - 1000);
+             keysToRemove.forEach(k => delete cache[k]);
+          }
+          localStorage.setItem('yingdao_task_details', JSON.stringify(cache));
+        } catch (e) {}
+      };
+
+      const taskDetailsCache = getTaskDetailsCache();
+
+      const fetchWithRetry = async (url: string, data: any, maxRetries = 5): Promise<any> => {
         let retries = 0;
         while (retries < maxRetries) {
           try {
-            return await axios.post(url, data);
+            const res = await axios.post(url, data);
+            if (res.data?.code === 429) {
+              throw { response: { status: 429, data: res.data } };
+            }
+            return res;
           } catch (e: any) {
-            if (e.response?.status === 429 && retries < maxRetries - 1) {
-              const waitTime = Math.pow(2, retries) * 1000 + Math.random() * 1000;
-              console.warn(`Rate limited (429). Waiting ${Math.round(waitTime)}ms before retry ${retries + 1}...`);
+            const isRateLimit = e.response?.status === 429 || e.data?.code === 429 || e.response?.data?.code === 429;
+            if (isRateLimit && retries < maxRetries - 1) {
+              const waitTime = Math.pow(2, retries + 1) * 1000 + Math.random() * 1000;
+              console.warn(`Rate limited (429) on ${url}. Waiting ${Math.round(waitTime)}ms before retry ${retries + 1}...`);
               await delay(waitTime);
               retries++;
               continue;
@@ -386,76 +418,162 @@ export default function App() {
           }
         }
       };
+
+      // Process tasks with a concurrency limit
+      const limit = 3;
       
-      for (let i = 0; i < activeTasks.length; i += batchSize) {
-        const batch = activeTasks.slice(i, i + batchSize);
-        const batchPromises = batch.map(async (item) => {
-          try {
-            const scheduleUuid = item.scheduleUuid || (item as any).uuid || (item as any).id;
-            
-            const detailPromise = fetchWithRetry('/api/yingdao/schedule/detail', {
-              token: accessToken,
-              scheduleUuid
-            }).catch(e => {
-              console.error(`获取任务详情失败 ${scheduleUuid}`, e.message);
-              return { data: { data: {} } };
-            });
+      console.log(`Processing ${activeTasks.length} active schedules...`);
 
-            // Fetch history for average duration
-            const historyPromise = fetchWithRetry('/api/yingdao/task/list', {
+      const processSchedule = async (item: ScheduleItem) => {
+        const scheduleUuid = item.scheduleUuid || (item as any).uuid || (item as any).id;
+        if (!scheduleUuid) return;
+
+        let historicalRuns: any[] = [];
+        let avgMins = 1;
+
+        try {
+          // Fetch history to calculate duration and show past 24h runs
+          let dataList: any[] = [];
+          let hasNext = true;
+          let nextId: any = undefined;
+          let page = 1;
+          
+          while (hasNext && dataList.length < 30 && page <= 3) {
+            const listRes = await fetchWithRetry('/api/yingdao/task/list', {
               token: accessToken,
-              payload: {
-                sourceUuid: scheduleUuid,
-                statusList: ["finish", "success"],
-                size: 20, // Reduced history size
-                startTime: format(addDays(new Date(), -30), 'yyyy-MM-dd HH:mm:ss'),
-                endTime: format(new Date(), 'yyyy-MM-dd HH:mm:ss')
+              payload: { sourceUuid: scheduleUuid, size: 20, cursorDirection: 'next', nextId, page }
+            });
+            
+            const td = listRes.data?.data;
+            let currentList: any[] = [];
+            if (Array.isArray(td)) currentList = td;
+            else if (Array.isArray(td?.dataList)) currentList = td.dataList;
+            else if (Array.isArray(td?.data)) currentList = td.data;
+            
+            if (currentList.length === 0) break;
+            dataList = dataList.concat(currentList);
+            
+            if (td?.hasData === false || (td?.page && td.page.page >= td.page.pages)) {
+              hasNext = false;
+            } else {
+              nextId = td?.nextId;
+              page++;
+            }
+            await delay(100);
+          }
+          
+          let totalDuration = 0;
+          let validCount = 0;
+
+          const parseDate = (dateVal: any) => {
+            if (!dateVal) return new Date(NaN);
+            if (typeof dateVal === 'number') {
+              return new Date(dateVal > 9999999999 ? dateVal : dateVal * 1000);
+            }
+            if (typeof dateVal === 'string') {
+              return new Date(dateVal.replace(' ', 'T'));
+            }
+            return new Date(dateVal);
+          };
+
+          for (const taskRecord of dataList) {
+            const taskUuid = String(taskRecord.taskUuid || taskRecord.uuid);
+            if (!taskUuid) continue;
+
+            let taskData = taskRecord;
+            
+            // Check cache first
+            if (taskDetailsCache[taskUuid]) {
+               taskData = { ...taskData, ...taskDetailsCache[taskUuid] };
+            } else if (!taskData.startTime) {
+              const queryRes = await fetchWithRetry('/api/yingdao/task/query', {
+                token: accessToken,
+                taskUuid
+              });
+              const queryData = queryRes.data?.data || queryRes.data;
+              if (queryData && queryData.startTime) {
+                 taskData = { ...taskData, startTime: queryData.startTime, endTime: queryData.endTime, status: queryData.status || queryData.statusName || taskData.status };
+                 // Save to cache if it has an end time (finished)
+                 if (queryData.endTime) {
+                   saveTaskDetailsToCache(taskUuid, { startTime: queryData.startTime, endTime: queryData.endTime, status: taskData.status });
+                 }
               }
-            }).catch(e => {
-              console.error(`获取任务历史失败 ${scheduleUuid}`, e.message);
-              return { data: { data: { dataList: [] } } };
-            });
+              await delay(200);
+            }
 
-            const [detailRes, historyRes] = await Promise.all([detailPromise, historyPromise]);
-            
-            const detailData = detailRes.data?.data || {};
-            const historyList = historyRes.data?.data?.dataList || [];
-            
-            let totalDuration = 0;
-            let validCount = 0;
-            
-            historyList.forEach((record: any) => {
-              if (record.createTime && record.updateTime) {
-                const start = parseISO(record.createTime.replace(' ', 'T'));
-                const end = parseISO(record.updateTime.replace(' ', 'T'));
-                if (!isNaN(start.getTime()) && !isNaN(end.getTime()) && end > start) {
+            if (taskData.startTime) {
+              const start = parseDate(taskData.startTime);
+              let end = new Date();
+              let hasValidEnd = false;
+              
+              if (taskData.endTime) {
+                end = parseDate(taskData.endTime);
+                hasValidEnd = !isNaN(end.getTime()) && end > start;
+              } else {
+                // For running tasks, estimate end time or use current time
+                end = new Date(Math.max(Date.now(), start.getTime() + 60000));
+              }
+              
+              if (!isNaN(start.getTime())) {
+                const isFinished = taskData.status === 'finish' || taskData.statusName === '完成' || taskData.status === 'success';
+                if (isFinished && hasValidEnd) {
                   totalDuration += (end.getTime() - start.getTime());
                   validCount++;
                 }
+                
+                // Add to historical runs if within last 24 hours
+                const now = new Date();
+                const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+                if (start >= twentyFourHoursAgo || end >= twentyFourHoursAgo) {
+                   historicalRuns.push({
+                     id: taskUuid,
+                     start,
+                     end,
+                     status: taskData.status || taskData.statusName || 'unknown'
+                   });
+                }
               }
-            });
-            
-            const averageDurationMins = validCount > 0 ? Math.max(1, Math.round(totalDuration / validCount / 60000)) : 1;
-
-            return { 
-              ...item, 
-              ...detailData,
-              cronInterface: detailData.cronInterface || item.cronInterface,
-              averageDurationMins
-            };
-          } catch (e) {
-            console.error(`处理任务失败`, e);
-            return { ...item, averageDurationMins: 1 }; // Fallback to list item if detail fails
+            }
           }
-        });
-        
-        const batchResults = await Promise.all(batchPromises);
-        details.push(...batchResults);
-        
-        // Add a small delay between batches to be safe
-        if (i + batchSize < activeTasks.length) {
-          await delay(500);
+
+          avgMins = validCount > 0 ? Math.max(1, Math.round(totalDuration / validCount / 60000)) : 1;
+          await delay(300);
+        } catch (e) {
+          console.error(`Failed to fetch history for ${scheduleUuid}`, e);
         }
+
+        // 2. Fetch details if needed
+        try {
+          let detailData: any = {};
+          const hasCron = !!item.cronInterface;
+          const hasRobotDetails = !!((item as any).robotClientList || (item as any).robotClientGroupList || (item as any).robotGroupList || (item as any).robotClientGroup);
+          
+          if (!hasCron || !hasRobotDetails) {
+            const detailRes = await fetchWithRetry('/api/yingdao/schedule/detail', {
+              token: accessToken,
+              scheduleUuid
+            });
+            detailData = detailRes.data?.data || {};
+            await delay(300);
+          }
+
+          details.push({ 
+            ...item, 
+            ...detailData,
+            cronInterface: detailData.cronInterface || item.cronInterface,
+            averageDurationMins: avgMins,
+            historicalRuns
+          });
+        } catch (e) {
+          details.push({ ...item, averageDurationMins: avgMins, historicalRuns } as any);
+        }
+      };
+
+      // Run with concurrency limit
+      for (let i = 0; i < activeTasks.length; i += limit) {
+        const batch = activeTasks.slice(i, i + limit);
+        await Promise.all(batch.map(processSchedule));
+        if (i + limit < activeTasks.length) await delay(500);
       }
       
       setSchedules(details);
@@ -472,37 +590,82 @@ export default function App() {
   const generateTasks = (items: ScheduleDetail[]) => {
     const newTasks: ExtendedScheduleTask[] = [];
     const now = new Date();
-    const startDateGen = startOfDay(subDays(now, 1)); // Start from yesterday to cover today's past tasks
-    const endDate = addDays(now, 30); // Generate for next 30 days
+    // 核心是知道将来有计划的任务的情况，所以从当前时间开始生成
+    const startDateGen = now; 
+    const endDate = addDays(now, 30); // 生成未来30天的计划
     
     items.forEach(item => {
+      // 过滤掉没规律的手动运行任务
+      if (item.scheduleType === 'manual' && !item.cronInterface) return;
+
       let cronIf = item.cronInterface;
       if (typeof cronIf === 'string') {
         try { cronIf = JSON.parse(cronIf); } catch (e) {}
       }
       
-      // Permissive check: if no cronInterface but has nextTime at the root level
+      // 如果没有 cron 接口且没有下一次运行时间，并且没有历史记录，则跳过
       const rootNextTime = (item as any).nextTime || (item as any).nextRunTime;
-      if (!cronIf && !rootNextTime) return;
+      const hasHistory = item.historicalRuns && item.historicalRuns.length > 0;
+      if (!cronIf && !rootNextTime && !hasHistory) return;
       
       const robotNames = item.robotList?.map(r => r.robotName) || [(item as any).appName || (item as any).robotName || '未知应用'];
       const robotName = robotNames[0];
       
-      let clientName = '未知机器人/组';
+      const clientNames: string[] = [];
       if (item.robotClientList && item.robotClientList.length > 0) {
-        clientName = item.robotClientList[0].robotClientName || clientName;
-      } else if (item.robotClientGroup && item.robotClientGroup.name) {
-        clientName = item.robotClientGroup.name;
-      } else if (item.robotClientGroupList && item.robotClientGroupList.length > 0) {
-        clientName = item.robotClientGroupList[0].robotClientGroupName || item.robotClientGroupList[0].name || clientName;
-      } else if (item.robotGroupList && item.robotGroupList.length > 0) {
-        clientName = item.robotGroupList[0].robotGroupName || item.robotGroupList[0].name || clientName;
-      } else if ((item as any).clientGroupName) {
-        clientName = (item as any).clientGroupName;
-      } else if ((item as any).robotGroupName) {
-        clientName = (item as any).robotGroupName;
-      } else if ((item as any).clientName) {
-        clientName = (item as any).clientName;
+        item.robotClientList.forEach(c => {
+          if (c.robotClientName) clientNames.push(c.robotClientName);
+          if ((c as any).windowsUserName) clientNames.push((c as any).windowsUserName);
+        });
+      }
+      if (item.robotClientGroup && item.robotClientGroup.name) {
+        clientNames.push(item.robotClientGroup.name);
+      }
+      if (item.robotClientGroupList && item.robotClientGroupList.length > 0) {
+        item.robotClientGroupList.forEach(g => {
+          if (g.robotClientGroupName) clientNames.push(g.robotClientGroupName);
+          else if (g.name) clientNames.push(g.name);
+        });
+      }
+      if (item.robotGroupList && item.robotGroupList.length > 0) {
+        item.robotGroupList.forEach(g => {
+          if (g.robotGroupName) clientNames.push(g.robotGroupName);
+          else if (g.name) clientNames.push(g.name);
+        });
+      }
+      if ((item as any).clientGroupName) clientNames.push((item as any).clientGroupName);
+      if ((item as any).robotGroupName) clientNames.push((item as any).robotGroupName);
+      if ((item as any).clientName) clientNames.push((item as any).clientName);
+      if ((item as any).creatorName) clientNames.push((item as any).creatorName);
+      if ((item as any).ownerName) clientNames.push((item as any).ownerName);
+      if ((item as any).userName) clientNames.push((item as any).userName);
+      if ((item as any).accountName) clientNames.push((item as any).accountName);
+      if ((item as any).creatorEmail) clientNames.push((item as any).creatorEmail);
+      
+      const clientName = clientNames.length > 0 ? clientNames[0] : '未知机器人/组';
+
+      // Add historical runs
+      if (hasHistory) {
+         item.historicalRuns.forEach((run: any) => {
+            let status = 'completed';
+            if (run.status === 'fail' || run.status === 'error' || run.statusName === '失败') status = 'failed';
+            else if (run.status === 'running' || run.statusName === '运行中') status = 'running';
+
+            newTasks.push({
+              id: `hist-${run.id}`,
+              name: item.scheduleName || (item as any).name || '未命名任务',
+              startDate: run.start,
+              endDate: run.end,
+              status: status as any,
+              robotName,
+              robotNames,
+              clientName,
+              clientNames,
+              scheduleUuid: item.scheduleUuid || (item as any).uuid || (item as any).id,
+              cronExpr: null,
+              isHistorical: true
+            });
+         });
       }
       
       try {
@@ -516,11 +679,9 @@ export default function App() {
           let nextDate = interval.next().toDate();
           
           let count = 0;
-          while (nextDate < endDate && count < 1000) { // Increased limit to 1000 executions per task
-            const durationMins = item.averageDurationMins || 1; // Default 1 min or average
+          while (nextDate < endDate && count < 1000) {
+            const durationMins = item.averageDurationMins || 1;
             const taskEndDate = new Date(nextDate.getTime() + durationMins * 60000);
-            
-            console.log(`[TaskDebug] Task: ${item.scheduleName}, Cron: ${cronExpr}, Next: ${nextDate.toISOString()}`);
             
             newTasks.push({
               id: `${item.scheduleUuid}-${count}`,
@@ -530,18 +691,19 @@ export default function App() {
               status: 'pending',
               robotName,
               robotNames,
-              clientName
+              clientName,
+              clientNames
             });
             
             nextDate = interval.next().toDate();
             count++;
           }
         } else {
-          // Fallback to nextTime if cron parsing fails or is manual
+          // 仅当有明确的下一次运行时间时才添加
           const nextTimeStr = cronIf?.nextTime || rootNextTime;
           if (nextTimeStr) {
             const nextDate = parseISO(nextTimeStr.replace(' ', 'T'));
-            if (!isNaN(nextDate.getTime())) {
+            if (!isNaN(nextDate.getTime()) && nextDate >= now) {
               newTasks.push({
                 id: `${item.scheduleUuid}-0`,
                 name: item.scheduleName || (item as any).name || '未命名任务',
@@ -550,7 +712,8 @@ export default function App() {
                 status: 'pending',
                 robotName,
                 robotNames,
-                clientName
+                clientName,
+                clientNames
               });
             }
           }
@@ -566,11 +729,12 @@ export default function App() {
 
   const filteredTasks = useMemo(() => {
     if (!searchTerm) return tasks;
-    const lower = searchTerm.toLowerCase();
+    const lower = searchTerm.trim().toLowerCase();
     return tasks.filter(t => 
       t.name.toLowerCase().includes(lower) || 
-      (t.robotName && t.robotName.toLowerCase().includes(lower)) ||
-      (t.clientName && t.clientName.toLowerCase().includes(lower))
+      t.id.toLowerCase().includes(lower) ||
+      (t.robotNames && t.robotNames.some(rn => rn.toLowerCase().includes(lower))) ||
+      (t.clientNames && t.clientNames.some(cn => cn.toLowerCase().includes(lower)))
     );
   }, [tasks, searchTerm]);
 
@@ -772,16 +936,30 @@ export default function App() {
                   groupBy={groupBy}
                   robotClients={robotClients}
                   robotGroups={robotGroups}
+                  searchTerm={searchTerm}
                 />
               </div>
             ) : (
               <div className="p-8 text-center text-gray-500 text-sm">
-                <p className="mb-4">该时间段内没有安排任务，或任务解析失败。</p>
-                {(schedules.length > 0 || rawResponse) && (
-                  <div className="text-left bg-gray-100 p-4 rounded-md overflow-auto max-h-96 text-xs font-mono">
-                    <p className="font-bold mb-2">调试信息 (获取到的原始任务数据):</p>
-                    <pre>{JSON.stringify(rawResponse || schedules, null, 2)}</pre>
+                {searchTerm ? (
+                  <div className="py-12">
+                    <Bot className="w-12 h-12 mx-auto text-gray-300 mb-4" />
+                    <p className="text-lg font-medium text-gray-900">未搜索到匹配结果</p>
+                    <p className="mt-1">请尝试更换搜索关键词，如任务名、应用名或机器人账号</p>
+                    <Button variant="link" onClick={() => setSearchTerm('')} className="mt-2">
+                      清除搜索
+                    </Button>
                   </div>
+                ) : (
+                  <>
+                    <p className="mb-4">该时间段内没有安排任务，或任务解析失败。</p>
+                    {(schedules.length > 0 || rawResponse) && (
+                      <div className="text-left bg-gray-100 p-4 rounded-md overflow-auto max-h-96 text-xs font-mono">
+                        <p className="font-bold mb-2">调试信息 (获取到的原始任务数据):</p>
+                        <pre>{JSON.stringify(rawResponse || schedules, null, 2)}</pre>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             )}

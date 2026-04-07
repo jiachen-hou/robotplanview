@@ -22,9 +22,18 @@ interface GanttChartProps {
   groupBy?: 'task' | 'robot';
   robotClients?: any[];
   robotGroups?: any[];
+  searchTerm?: string;
 }
 
-export function GanttChart({ tasks, viewMode, currentDate, groupBy = 'task', robotClients = [], robotGroups = [] }: GanttChartProps) {
+export function GanttChart({ 
+  tasks, 
+  viewMode, 
+  currentDate, 
+  groupBy = 'task', 
+  robotClients = [], 
+  robotGroups = [],
+  searchTerm = ''
+}: GanttChartProps) {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
 
@@ -80,7 +89,7 @@ export function GanttChart({ tasks, viewMode, currentDate, groupBy = 'task', rob
 
   const columnWidth = useMemo(() => {
     switch (viewMode) {
-      case 'Day': return 80;
+      case 'Day': return 120;
       case 'Week': return 200;
       case 'Month': return 60;
       case 'Year': return 150;
@@ -90,13 +99,17 @@ export function GanttChart({ tasks, viewMode, currentDate, groupBy = 'task', rob
 
   const gridMinWidth = totalColumns * columnWidth;
 
-  function getTaskColor(taskName: string) {
+  function getTaskColor(task: ExtendedScheduleTask) {
+    if (task.status === 'failed') return 'hsl(0, 84%, 60%)';
+    if (task.status === 'running') return 'hsl(200, 84%, 50%)';
+    if (task.status === 'completed') return 'hsl(142, 76%, 45%)';
+    
     let hash = 0;
-    for (let i = 0; i < taskName.length; i++) {
-      hash = taskName.charCodeAt(i) + ((hash << 5) - hash);
+    for (let i = 0; i < task.name.length; i++) {
+      hash = task.name.charCodeAt(i) + ((hash << 5) - hash);
     }
     const hue = Math.abs(hash) % 360;
-    return `hsl(${hue}, 70%, 50%)`;
+    return `hsl(${hue}, 60%, 55%)`;
   }
 
   // Group tasks by schedule name, app, and robot OR by robot client
@@ -180,9 +193,16 @@ export function GanttChart({ tasks, viewMode, currentDate, groupBy = 'task', rob
         groups[key].executions.push(task);
       });
 
-      return Object.values(groups);
+      const result = Object.values(groups);
+      
+      // 如果正在搜索，则只显示有任务的账号
+      if (searchTerm) {
+        return result.filter(g => g.executions.length > 0);
+      }
+      
+      return result;
     }
-  }, [tasks, groupBy, robotClients, robotGroups]);
+  }, [tasks, groupBy, robotClients, robotGroups, searchTerm]);
 
   const groupedTasksWithLanes = useMemo(() => {
     return groupedTasks.map(group => {
@@ -222,7 +242,7 @@ export function GanttChart({ tasks, viewMode, currentDate, groupBy = 'task', rob
 
   const now = new Date();
   const isNowVisible = now >= startDate && now <= endDate;
-  const nowLeftPercent = isNowVisible ? (differenceInMinutes(now, startDate) / totalMinutes) * 100 : -1;
+  const nowLeftPercent = isNowVisible ? ((now.getTime() - startDate.getTime()) / (totalMinutes * 60 * 1000)) * 100 : -1;
 
   return (
     <div className="flex flex-col w-full border rounded-md bg-white max-h-[calc(100vh-280px)] shadow-sm overflow-hidden">
@@ -261,8 +281,8 @@ export function GanttChart({ tasks, viewMode, currentDate, groupBy = 'task', rob
           {/* Task Rows */}
           <div className="relative">
             {paginatedGroups.length === 0 ? (
-              <div className="p-8 text-center text-gray-500 text-sm">
-                该时间段内没有安排任务。
+              <div className="p-12 text-center text-gray-500 text-sm bg-white">
+                {searchTerm ? "未搜索到匹配的账号或任务。" : "该时间段内没有安排任务。"}
               </div>
             ) : (
               paginatedGroups.map((group) => (
@@ -334,28 +354,34 @@ export function GanttChart({ tasks, viewMode, currentDate, groupBy = 'task', rob
                       const visibleStart = task.startDate < startDate ? startDate : task.startDate;
                       const visibleEnd = task.endDate > endDate ? endDate : task.endDate;
 
-                      const startDiffMins = differenceInMinutes(visibleStart, startDate);
-                      const durationMins = differenceInMinutes(visibleEnd, visibleStart);
+                      const startDiffMs = visibleStart.getTime() - startDate.getTime();
+                      const durationMs = visibleEnd.getTime() - visibleStart.getTime();
+                      const totalMs = totalMinutes * 60 * 1000;
                       
-                      const leftPercent = Math.max(0, (startDiffMins / totalMinutes) * 100);
-                      let widthPercent = Math.min(100 - leftPercent, Math.max(0.5, (durationMins / totalMinutes) * 100));
-                      
-                      if (widthPercent < 0.3) widthPercent = 0.3; // Minimum width
+                      const leftPercent = Math.max(0, (startDiffMs / totalMs) * 100);
+                      let widthPercent = Math.min(100 - leftPercent, (durationMs / totalMs) * 100);
 
                       return (
                         <div
                           key={task.id}
                           className={cn(
-                            "absolute h-4 rounded-sm shadow-sm flex items-center px-1 text-[9px] text-white truncate transition-all cursor-pointer opacity-90 hover:opacity-100 hover:z-30 hover:ring-2 hover:ring-offset-1 hover:ring-indigo-400"
+                            "absolute h-4 rounded-sm shadow-sm flex items-center px-1 text-[9px] text-white truncate transition-all cursor-pointer hover:z-30 hover:ring-2 hover:ring-offset-1 hover:ring-indigo-400",
+                            task.status === 'running' && "animate-pulse ring-1 ring-blue-400",
+                            task.status === 'pending' ? "opacity-70 border border-dashed border-white/30" : "opacity-100"
                           )}
                           style={{
                             left: `${leftPercent}%`,
                             width: `${widthPercent}%`,
                             top: `${4 + task.lane * 20}px`,
                             minWidth: '3px',
-                            backgroundColor: getTaskColor(task.name)
+                            backgroundColor: getTaskColor(task)
                           }}
-                          title={`${task.name}\n应用: ${task.robotName}\n机器人/组: ${task.clientName}\n开始: ${format(task.startDate, 'yyyy-MM-dd HH:mm:ss')}\n结束: ${format(task.endDate, 'yyyy-MM-dd HH:mm:ss')}`}
+                          title={`${task.name}\n状态: ${{
+                            pending: '计划中',
+                            running: '运行中',
+                            completed: '已完成',
+                            failed: '失败'
+                          }[task.status]}\n应用: ${task.robotName}\n机器人/组: ${task.clientName}\n开始: ${format(task.startDate, 'yyyy-MM-dd HH:mm:ss')}\n结束: ${format(task.endDate, 'yyyy-MM-dd HH:mm:ss')}`}
                         >
                           {widthPercent > 3 && format(task.startDate, viewMode === 'Day' ? 'HH:mm' : 'MM-dd HH:mm')}
                         </div>

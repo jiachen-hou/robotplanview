@@ -464,6 +464,7 @@ export default function App() {
           
           let totalDuration = 0;
           let validCount = 0;
+          const seenTaskUuids = new Set<string>();
 
           const parseDate = (dateVal: any) => {
             if (!dateVal) return new Date(NaN);
@@ -478,7 +479,8 @@ export default function App() {
 
           for (const taskRecord of dataList) {
             const taskUuid = String(taskRecord.taskUuid || taskRecord.uuid);
-            if (!taskUuid) continue;
+            if (!taskUuid || seenTaskUuids.has(taskUuid)) continue;
+            seenTaskUuids.add(taskUuid);
 
             let taskData = taskRecord;
             
@@ -652,7 +654,7 @@ export default function App() {
             else if (run.status === 'running' || run.statusName === '运行中') status = 'running';
 
             newTasks.push({
-              id: `hist-${run.id}`,
+              id: `hist-${item.scheduleUuid || (item as any).uuid || (item as any).id}-${run.id}`,
               name: item.scheduleName || (item as any).name || '未命名任务',
               startDate: run.start,
               endDate: run.end,

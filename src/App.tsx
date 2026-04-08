@@ -373,29 +373,6 @@ export default function App() {
       const details: ScheduleDetail[] = [];
       const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-      // Task details cache to avoid repeated task/query calls
-      const getTaskDetailsCache = () => {
-        try {
-          const cached = localStorage.getItem('yingdao_task_details');
-          return cached ? JSON.parse(cached) : {};
-        } catch (e) { return {}; }
-      };
-      const saveTaskDetailsToCache = (uuid: string, data: any) => {
-        try {
-          const cache = getTaskDetailsCache();
-          cache[uuid] = data;
-          // Prune cache if it gets too large
-          const keys = Object.keys(cache);
-          if (keys.length > 1000) {
-             const keysToRemove = keys.slice(0, keys.length - 1000);
-             keysToRemove.forEach(k => delete cache[k]);
-          }
-          localStorage.setItem('yingdao_task_details', JSON.stringify(cache));
-        } catch (e) {}
-      };
-
-      const taskDetailsCache = getTaskDetailsCache();
-
       const fetchWithRetry = async (url: string, data: any, maxRetries = 5): Promise<any> => {
         let retries = 0;
         while (retries < maxRetries) {
@@ -484,32 +461,18 @@ export default function App() {
 
             let taskData = taskRecord;
             
-            // Check cache first
-            if (taskDetailsCache[taskUuid]) {
-               taskData = { ...taskData, ...taskDetailsCache[taskUuid] };
-            } else if (!taskData.startTime) {
-              const queryRes = await fetchWithRetry('/api/yingdao/task/query', {
-                token: accessToken,
-                taskUuid
-              });
-              const queryData = queryRes.data?.data || queryRes.data;
-              if (queryData && queryData.startTime) {
-                 taskData = { ...taskData, startTime: queryData.startTime, endTime: queryData.endTime, status: queryData.status || queryData.statusName || taskData.status };
-                 // Save to cache if it has an end time (finished)
-                 if (queryData.endTime) {
-                   saveTaskDetailsToCache(taskUuid, { startTime: queryData.startTime, endTime: queryData.endTime, status: taskData.status });
-                 }
-              }
-              await delay(200);
-            }
+            // 采用方案一：直接使用 list 接口返回的 createTime 和 updateTime，彻底干掉 query 接口调用
+            const sceneInstStartTime = taskData.taskClients && taskData.taskClients.length > 0 ? taskData.taskClients[0].sceneInstStartTime : null;
+            const startTimeStr = taskData.startTime || sceneInstStartTime || taskData.createTime;
+            const endTimeStr = taskData.endTime || taskData.updateTime;
 
-            if (taskData.startTime) {
-              const start = parseDate(taskData.startTime);
+            if (startTimeStr) {
+              const start = parseDate(startTimeStr);
               let end = new Date();
               let hasValidEnd = false;
               
-              if (taskData.endTime) {
-                end = parseDate(taskData.endTime);
+              if (endTimeStr) {
+                end = parseDate(endTimeStr);
                 hasValidEnd = !isNaN(end.getTime()) && end > start;
               } else {
                 // For running tasks, estimate end time or use current time

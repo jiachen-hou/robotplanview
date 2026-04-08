@@ -486,10 +486,10 @@ export default function App() {
                   validCount++;
                 }
                 
-                // Add to historical runs if within last 24 hours
+                // Add to historical runs if within last 7 days (to ensure we catch more recent runs)
                 const now = new Date();
-                const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-                if (start >= twentyFourHoursAgo || end >= twentyFourHoursAgo) {
+                const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+                if (start >= sevenDaysAgo || end >= sevenDaysAgo) {
                    historicalRuns.push({
                      id: taskUuid,
                      start,
@@ -502,7 +502,6 @@ export default function App() {
           }
 
           avgMins = validCount > 0 ? Math.max(1, Math.round(totalDuration / validCount / 60000)) : 1;
-          await delay(300);
         } catch (e) {
           console.error(`Failed to fetch history for ${scheduleUuid}`, e);
         }
@@ -538,7 +537,8 @@ export default function App() {
       for (let i = 0; i < activeTasks.length; i += limit) {
         const batch = activeTasks.slice(i, i + limit);
         await Promise.all(batch.map(processSchedule));
-        if (i + limit < activeTasks.length) await delay(500);
+        // Only delay if we are not at the end, and keep it short since we removed heavy queries
+        if (i + limit < activeTasks.length) await delay(100);
       }
       
       setSchedules(details);

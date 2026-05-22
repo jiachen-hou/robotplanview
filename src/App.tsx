@@ -240,6 +240,14 @@ export interface ExtendedScheduleTask extends ScheduleTask {
   cronExpr?: string | null;
 }
 
+interface RealtimeTaskScope {
+  scheduleName: string;
+  scheduleUuid?: string;
+  groupNames: string[];
+  executionScopeType: ExtendedScheduleTask['executionScopeType'];
+  executionScopeLabel: string;
+}
+
 const SCHEDULE_PAGE_SIZE = 200;
 const TASK_PAGE_SIZE = 100;
 const RECENT_HISTORY_DAYS = 7;
@@ -287,6 +295,55 @@ function formatNamesForLabel(names: string[], emptyText: string): string {
   if (uniqueNames.length === 0) return emptyText;
   if (uniqueNames.length <= 2) return uniqueNames.join('、');
   return `${uniqueNames.slice(0, 2).join('、')} 等 ${uniqueNames.length} 个`;
+}
+
+function findByLookupKey<T>(lookupMap: ReadonlyMap<string, T>, value?: string | null): T | undefined {
+  const key = normalizeLookupKey(value);
+  if (!key) return undefined;
+  return lookupMap.get(key)
+    || [...lookupMap.entries()].find(([name]) => name.includes(key) || key.includes(name))?.[1];
+}
+
+function getScheduleGroupNames(detail: Partial<ScheduleDetail>): string[] {
+  return uniqueStrings([
+    ...(detail.robotClientGroupList?.flatMap((item) => [item.robotClientGroupName, item.name]) || []),
+    ...(detail.robotGroupList?.flatMap((item) => [item.robotGroupName, item.name]) || []),
+    detail.robotClientGroup?.name,
+    (detail as any).clientGroupName,
+    (detail as any).robotGroupName,
+  ]);
+}
+
+function getScheduleConfiguredAccountNames(detail: Partial<ScheduleDetail>): string[] {
+  return uniqueStrings([
+    ...(detail.robotClientList?.flatMap((client) => [client.robotClientName, client.windowsUserName]) || []),
+  ]);
+}
+
+function describeExecutionScope(
+  groupNames: string[],
+  configuredAccountNames: string[],
+  clientNames: string[] = [],
+): { executionScopeType: ExtendedScheduleTask['executionScopeType']; executionScopeLabel: string } {
+  const executionScopeType: ExtendedScheduleTask['executionScopeType'] = groupNames.length > 0 && configuredAccountNames.length > 0
+    ? 'mixed'
+    : groupNames.length > 0
+      ? 'group'
+      : configuredAccountNames.length > 0
+        ? 'account'
+        : 'unknown';
+
+  const executionScopeLabel = executionScopeType === 'mixed'
+    ? `指定账号 ${formatNamesForLabel(configuredAccountNames, '未返回账号')}；机器人组 ${formatNamesForLabel(groupNames, '未返回分组')}`
+    : executionScopeType === 'group'
+      ? `从机器人组 ${formatNamesForLabel(groupNames, '未返回分组')} 中调度`
+      : executionScopeType === 'account'
+        ? `指定账号 ${formatNamesForLabel(configuredAccountNames, '未返回账号')}`
+        : clientNames.length > 0
+          ? `历史账号 ${formatNamesForLabel(clientNames, '未返回账号')}`
+          : '未指定执行范围';
+
+  return { executionScopeType, executionScopeLabel };
 }
 
 function parseDateValue(value?: string | number | null): Date | null {
@@ -1008,14 +1065,8 @@ export default function App() {
         (item as any).robotName,
         (item as any).appName,
       ]);
-      const configuredAccountNames = uniqueStrings([
-        ...(item.robotClientList?.flatMap((client) => [client.robotClientName, client.windowsUserName]) || []),
-      ]);
-      const groupNames = uniqueStrings([
-        ...(item.robotClientGroupList?.flatMap((group) => [group.robotClientGroupName, group.name]) || []),
-        ...(item.robotGroupList?.flatMap((group) => [group.robotGroupName, group.name]) || []),
-        item.robotClientGroup?.name,
-      ]);
+      const configuredAccountNames = getScheduleConfiguredAccountNames(item);
+      const groupNames = getScheduleGroupNames(item);
       const observedClientNames = uniqueStrings([
         ...(item.derivedClientNames || []),
         (item as any).clientName,
@@ -1025,22 +1076,11 @@ export default function App() {
         ...configuredAccountNames,
         ...observedClientNames,
       ]);
-      const executionScopeType: ExtendedScheduleTask['executionScopeType'] = groupNames.length > 0 && configuredAccountNames.length > 0
-        ? 'mixed'
-        : groupNames.length > 0
-          ? 'group'
-          : configuredAccountNames.length > 0
-            ? 'account'
-            : 'unknown';
-      const executionScopeLabel = executionScopeType === 'mixed'
-        ? `指定账号 ${formatNamesForLabel(configuredAccountNames, '未返回账号')}；机器人组 ${formatNamesForLabel(groupNames, '未返回分组')}`
-        : executionScopeType === 'group'
-          ? `从机器人组 ${formatNamesForLabel(groupNames, '未返回分组')} 中调度`
-          : executionScopeType === 'account'
-            ? `指定账号 ${formatNamesForLabel(configuredAccountNames, '未返回账号')}`
-            : clientNames.length > 0
-              ? `历史账号 ${formatNamesForLabel(clientNames, '未返回账号')}`
-              : '未指定执行范围';
+      const { executionScopeType, executionScopeLabel } = describeExecutionScope(
+        groupNames,
+        configuredAccountNames,
+        clientNames,
+      );
       const taskGroupKey = item.scheduleUuid || `schedule-${normalizeLookupKey(item.scheduleName)}`;
 
       const robotName = robotNames[0] || '未知应用';
@@ -1545,7 +1585,7 @@ export default function App() {
     return durationMap;
   }, [schedules]);
 
-  const scheduleByTaskName = useMemo(() => {
+  const scheduleByTaskName = useMemo<Map<string, ScheduleDetail>>(() => {
     const scheduleMap = new Map<string, ScheduleDetail>();
 
     schedules.forEach((item) => {
@@ -1558,6 +1598,45 @@ export default function App() {
     return scheduleMap;
   }, [schedules]);
 
+  const realtimeTaskScopeByName = useMemo<Map<string, RealtimeTaskScope>>(() => {
+    const scopeMap = new Map<string, RealtimeTaskScope>();
+
+    schedules.forEach((item) => {
+      const key = normalizeLookupKey(item.scheduleName);
+      if (!key || scopeMap.has(key)) return;
+
+      const groupNames = getScheduleGroupNames(item);
+      const configuredAccountNames = getScheduleConfiguredAccountNames(item);
+      const observedClientNames = uniqueStrings([
+        ...(item.derivedClientNames || []),
+        (item as any).clientName,
+        (item as any).creatorName,
+      ]);
+      const clientNames = uniqueStrings([
+        ...configuredAccountNames,
+        ...observedClientNames,
+      ]);
+      const { executionScopeType, executionScopeLabel } = describeExecutionScope(
+        groupNames,
+        configuredAccountNames,
+        clientNames,
+      );
+
+      scopeMap.set(key, {
+        scheduleName: item.scheduleName || '未命名任务',
+        scheduleUuid: item.scheduleUuid,
+        groupNames,
+        executionScopeType,
+        executionScopeLabel,
+      });
+    });
+
+    return scopeMap;
+  }, [schedules]);
+
+  const getRealtimeTaskScope = (task?: RealtimeQueueTask): RealtimeTaskScope | undefined =>
+    task ? findByLookupKey<RealtimeTaskScope>(realtimeTaskScopeByName, task.taskName || task.scheduleName) : undefined;
+
   const realtimeRunningTimelineTasks = useMemo<ExtendedScheduleTask[]>(() => {
     return realtimeQueueRows.flatMap((row) =>
       row.runningTasks
@@ -1569,10 +1648,10 @@ export default function App() {
           const liveEnd = clockNow > start ? clockNow : new Date(start.getTime() + 1000);
           const taskNameKey = normalizeLookupKey(task.taskName || task.scheduleName);
           const matchedSchedule = taskNameKey
-            ? scheduleByTaskName.get(taskNameKey)
-              || [...scheduleByTaskName.entries()].find(([name]) =>
-                name.includes(taskNameKey) || taskNameKey.includes(name),
-              )?.[1]
+            ? findByLookupKey<ScheduleDetail>(scheduleByTaskName, taskNameKey)
+            : undefined;
+          const matchedScope = taskNameKey
+            ? findByLookupKey<RealtimeTaskScope>(realtimeTaskScopeByName, taskNameKey)
             : undefined;
           let averageDurationMins = averageDurationByTaskName.get(taskNameKey);
           if (!averageDurationMins && taskNameKey) {
@@ -1587,6 +1666,13 @@ export default function App() {
           const taskName = matchedSchedule?.scheduleName || task.taskName || task.scheduleName || '实时运行任务';
           const scheduleUuid = matchedSchedule?.scheduleUuid || task.scheduleUuid || undefined;
           const taskGroupKey = scheduleUuid || `realtime-${taskNameKey || task.taskUuid}`;
+          const groupNames = matchedScope?.groupNames || [];
+          const executionScopeType: ExtendedScheduleTask['executionScopeType'] = groupNames.length > 0
+            ? (matchedScope?.executionScopeType === 'mixed' ? 'mixed' : 'group')
+            : 'realtime';
+          const executionScopeLabel = groupNames.length > 0
+            ? `正在 ${row.accountName} 执行；来自机器人组 ${formatNamesForLabel(groupNames, '未返回分组')}`
+            : `正在 ${row.accountName} 执行`;
 
           return {
             id: `live-${row.accountKey}-${task.taskUuid}`,
@@ -1598,9 +1684,9 @@ export default function App() {
             robotNames: uniqueStrings([task.robotName]),
             clientName: row.accountName,
             clientNames: [row.accountName],
-            groupNames: [],
-            executionScopeType: 'realtime',
-            executionScopeLabel: `正在 ${row.accountName} 执行`,
+            groupNames,
+            executionScopeType,
+            executionScopeLabel,
             taskGroupKey,
             isHistorical: false,
             isRealtime: true,
@@ -1611,7 +1697,7 @@ export default function App() {
         })
         .filter((task): task is ExtendedScheduleTask => task !== null),
     );
-  }, [averageDurationByTaskName, clockNow, realtimeQueueRows, scheduleByTaskName]);
+  }, [averageDurationByTaskName, clockNow, realtimeQueueRows, realtimeTaskScopeByName, scheduleByTaskName]);
 
   const timelineTasks = useMemo(
     () => [...tasks, ...realtimeRunningTimelineTasks],
@@ -1654,13 +1740,20 @@ export default function App() {
 
       if (!keyword) return true;
 
+      const taskMatchesKeyword = (task: RealtimeQueueTask) => {
+        const scope = findByLookupKey<RealtimeTaskScope>(realtimeTaskScopeByName, task.taskName || task.scheduleName);
+        return task.taskName.toLowerCase().includes(keyword)
+          || scope?.groupNames.some((name) => matchesAccountKeyword(name, keyword))
+          || scope?.executionScopeLabel.toLowerCase().includes(keyword);
+      };
+
       return row.accountName.toLowerCase().includes(keyword)
         || row.machineName?.toLowerCase().includes(keyword)
         || row.clientIp?.toLowerCase().includes(keyword)
-        || row.runningTasks.some((task) => task.taskName.toLowerCase().includes(keyword))
-        || row.queuedTasks.some((task) => task.taskName.toLowerCase().includes(keyword));
+        || row.runningTasks.some(taskMatchesKeyword)
+        || row.queuedTasks.some(taskMatchesKeyword);
     });
-  }, [queueSearchTerm, queueStatusFilter, realtimeQueueRows]);
+  }, [queueSearchTerm, queueStatusFilter, realtimeQueueRows, realtimeTaskScopeByName]);
 
   const realtimeRobotStatusSummary = useMemo(() => {
     const counts: Record<RobotStatusFilter, number> = {
@@ -1798,7 +1891,11 @@ export default function App() {
 
         {filteredRealtimeQueueRows.length > 0 ? (
           <div className="min-h-0 flex-1 overflow-y-auto">
-            {filteredRealtimeQueueRows.map((row) => (
+            {filteredRealtimeQueueRows.map((row) => {
+              const currentTask = row.runningTasks[0];
+              const currentTaskScope = getRealtimeTaskScope(currentTask);
+
+              return (
               <div key={row.accountKey} className="border-b border-gray-100 px-3 py-2.5 last:border-b-0 dark:border-slate-700">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
@@ -1828,15 +1925,20 @@ export default function App() {
                   </div>
                 </div>
 
-                {row.runningTasks[0] && (
+                {currentTask && (
                   <div className="mt-2 rounded-md bg-gray-50 px-3 py-2 dark:bg-slate-800">
                     <div className="text-[11px] text-gray-500 dark:text-slate-400">当前任务</div>
                     <div className="mt-1 text-xs font-medium text-gray-900 break-words dark:text-slate-50">
-                      {row.runningTasks[0].taskName}
+                      {currentTask.taskName}
                     </div>
-                    {row.runningTasks[0].startedAt && (
+                    {currentTaskScope?.groupNames.length ? (
+                      <div className="mt-1 text-[11px] font-medium text-purple-700 dark:text-purple-200">
+                        机器人组：{formatNamesForLabel(currentTaskScope.groupNames, '未返回分组')}
+                      </div>
+                    ) : null}
+                    {currentTask.startedAt && (
                       <div className="mt-1 text-[11px] text-gray-500 dark:text-slate-400">
-                        开始于 {format(parseDateValue(row.runningTasks[0].startedAt) || new Date(), 'MM-dd HH:mm:ss')}
+                        开始于 {format(parseDateValue(currentTask.startedAt) || new Date(), 'MM-dd HH:mm:ss')}
                       </div>
                     )}
                   </div>
@@ -1852,16 +1954,25 @@ export default function App() {
                   <div className="mt-2">
                     <div className="mb-1 text-[11px] text-gray-500 dark:text-slate-400">排队任务</div>
                     <div className="space-y-1">
-                      {row.queuedTasks.slice(0, 3).map((task) => (
-                        <div key={task.taskUuid} className="rounded-md border border-gray-100 px-3 py-2 text-xs text-gray-700 dark:border-slate-700 dark:text-slate-300">
-                          <div className="font-medium text-gray-900 break-words dark:text-slate-50">{task.taskName}</div>
-                          {task.updatedAt && (
-                            <div className="mt-1 text-[11px] text-gray-500 dark:text-slate-400">
-                              最新时间 {format(parseDateValue(task.updatedAt) || new Date(), 'MM-dd HH:mm:ss')}
-                            </div>
-                          )}
-                        </div>
-                      ))}
+                      {row.queuedTasks.slice(0, 3).map((task) => {
+                        const taskScope = getRealtimeTaskScope(task);
+
+                        return (
+                          <div key={task.taskUuid} className="rounded-md border border-gray-100 px-3 py-2 text-xs text-gray-700 dark:border-slate-700 dark:text-slate-300">
+                            <div className="font-medium text-gray-900 break-words dark:text-slate-50">{task.taskName}</div>
+                            {taskScope?.groupNames.length ? (
+                              <div className="mt-1 text-[11px] font-medium text-purple-700 dark:text-purple-200">
+                                机器人组：{formatNamesForLabel(taskScope.groupNames, '未返回分组')}
+                              </div>
+                            ) : null}
+                            {task.updatedAt && (
+                              <div className="mt-1 text-[11px] text-gray-500 dark:text-slate-400">
+                                最新时间 {format(parseDateValue(task.updatedAt) || new Date(), 'MM-dd HH:mm:ss')}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                       {row.queuedTasks.length > 3 && (
                         <div className="text-[11px] text-gray-500 dark:text-slate-400">
                           还有 {row.queuedTasks.length - 3} 个排队任务
@@ -1871,7 +1982,8 @@ export default function App() {
                   </div>
                 )}
               </div>
-            ))}
+              );
+            })}
           </div>
         ) : (
           <div className="px-4 py-10 text-center text-sm text-gray-500 dark:text-slate-400">

@@ -302,11 +302,14 @@ export function GanttChart({
     });
 
     tasks.forEach((task) => {
-      const groupNames = task.isRealtime ? [] : uniqueValues(task.groupNames || []);
+      const groupNames = uniqueValues(task.groupNames || []);
       const accountNames = uniqueValues([...(task.clientNames || []), task.clientName]);
-      const targetRows = groupNames.length > 0
-        ? groupNames.map((name) => ({ name, isGroup: true }))
-        : (accountNames.length > 0 ? accountNames : ['未指定账号']).map((name) => ({ name, isGroup: false }));
+      const targetRows = [
+        ...groupNames.map((name) => ({ name, isGroup: true })),
+        ...((task.isRealtime || groupNames.length === 0)
+          ? (accountNames.length > 0 ? accountNames : ['未指定账号']).map((name) => ({ name, isGroup: false }))
+          : []),
+      ];
 
       targetRows.forEach(({ name, isGroup }) => {
         const group = createGroup(groups, `${isGroup ? 'group' : 'account'}_${name}`, {
@@ -523,6 +526,11 @@ export function GanttChart({
                         </div>
                         <div className="text-[10px] text-gray-500 dark:text-[#8b949e]">
                           {group.isGroup ? '机器人组任务' : '任务数量'}: {group.executions.length}
+                          {group.executions.some((task) => task.status === 'running') && (
+                            <span className="ml-1 text-blue-600 dark:text-[#58a6ff]">
+                              执行中 {group.executions.filter((task) => task.status === 'running').length}
+                            </span>
+                          )}
                         </div>
                       </>
                     )}

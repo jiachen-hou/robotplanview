@@ -174,6 +174,31 @@ app.post("/api/yingdao/client/list", async (req, res) => {
   }
 });
 
+// Proxy to query one robot client
+app.post("/api/yingdao/client/query", async (req, res) => {
+  try {
+    const { token, payload } = req.body;
+    const response = await axios.post(
+      `https://api.yingdao.com/oapi/dispatch/v2/client/query`,
+      payload || {},
+      {
+        headers: {
+          "Authorization": `Bearer ${token}`,
+          "User-Agent": "Apifox/1.0.0 (https://apifox.com)",
+          "Content-Type": "application/json",
+          "Accept": "*/*",
+          "Host": "api.yingdao.com",
+          "Connection": "keep-alive"
+        }
+      }
+    );
+    res.json(response.data);
+  } catch (error: any) {
+    console.error("Client query error:", JSON.stringify(error.response?.data || error.message));
+    res.status(error.response?.status || 500).json(error.response?.data || { error: error.message });
+  }
+});
+
 // Proxy to get client group list
 app.post("/api/yingdao/client/group/list", async (req, res) => {
   try {
@@ -195,6 +220,31 @@ app.post("/api/yingdao/client/group/list", async (req, res) => {
     res.json(response.data);
   } catch (error: any) {
     console.error("Client group list error:", JSON.stringify(error.response?.data || error.message));
+    res.status(error.response?.status || 500).json(error.response?.data || { error: error.message });
+  }
+});
+
+// Proxy to get the actual robot task queue
+app.post("/api/yingdao/job/list", async (req, res) => {
+  try {
+    const { token, payload } = req.body;
+    const response = await axios.post(
+      `https://api.yingdao.com/oapi/dispatch/v2/job/list`,
+      payload || {},
+      {
+        headers: {
+          "Authorization": `Bearer ${token}`,
+          "User-Agent": "Apifox/1.0.0 (https://apifox.com)",
+          "Content-Type": "application/json",
+          "Accept": "*/*",
+          "Host": "api.yingdao.com",
+          "Connection": "keep-alive"
+        }
+      }
+    );
+    res.json(response.data);
+  } catch (error: any) {
+    console.error("Job list error:", JSON.stringify(error.response?.data || error.message));
     res.status(error.response?.status || 500).json(error.response?.data || { error: error.message });
   }
 });

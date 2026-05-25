@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   addDays,
   differenceInMinutes,
@@ -32,7 +32,10 @@ type TaskGroup = {
   robotName: string;
   robotNames?: string[];
   clientName: string;
+  scopeLabel?: string;
+  groupNames?: string[];
   isGroup?: boolean;
+  isFallbackGroup?: boolean;
   executions: Array<ExtendedScheduleTask & { lane: number }>;
   totalLanes: number;
 };
@@ -48,7 +51,8 @@ interface GanttChartProps {
   tasks: ExtendedScheduleTask[];
   viewMode: ViewMode;
   currentDate: Date;
-  groupBy?: 'task' | 'robot';
+  currentTime?: Date;
+  groupBy?: 'task' | 'account';
   robotClients?: any[];
   robotGroups?: any[];
   searchTerm?: string;
@@ -56,13 +60,25 @@ interface GanttChartProps {
 
 function matchesRobotGroupKeyword(value: string | undefined, keyword: string): boolean {
   if (!value) return false;
-
   const normalizedValue = value.trim().toLowerCase();
   const normalizedKeyword = keyword.trim().toLowerCase();
   if (!normalizedValue || !normalizedKeyword) return false;
+  return normalizedValue.includes(normalizedKeyword) || normalizedValue.split('@')[0].includes(normalizedKeyword);
+}
 
-  const accountPart = normalizedValue.split('@')[0];
-  return normalizedValue.includes(normalizedKeyword) || accountPart.includes(normalizedKeyword);
+function normalizeGroupKey(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function uniqueValues(values: Array<string | undefined | null>): string[] {
+  return [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])];
+}
+
+function formatCompactNames(values: Array<string | undefined | null>, emptyText: string): string {
+  const names = uniqueValues(values);
+  if (names.length === 0) return emptyText;
+  if (names.length <= 2) return names.join('、');
+  return `${names.slice(0, 2).join('、')} 等 ${names.length} 个`;
 }
 
 function getStatusLabel(status: string | undefined): string {
@@ -72,13 +88,11 @@ function getStatusLabel(status: string | undefined): string {
     case 'running':
       return '运行中';
     case 'completed':
-      return '已完成';
-    case 'failed':
-      return '失败';
     case 'finish':
       return '完成';
+    case 'failed':
     case 'error':
-      return '异常';
+      return '失败';
     case 'stopped':
       return '已结束';
     case 'stopping':
@@ -95,6 +109,7 @@ function getStatusLabel(status: string | undefined): string {
 }
 
 function getTaskTypeLabel(task: ExtendedScheduleTask): string {
+  if (task.isRealtime) return '实时运行';
   if (task.isHistorical) return '历史样本';
   return '未来计划';
 }
@@ -108,39 +123,51 @@ function formatDuration(startDate: Date, endDate: Date): string {
   if (hours > 0 && minutes > 0) return `${hours} 小时 ${minutes} 分钟`;
   if (hours > 0) return `${hours} 小时`;
   if (minutes > 0) return `${minutes} 分钟`;
-  const seconds = Math.max(1, Math.round(diffMs / 1000));
-  return `${seconds} 秒`;
+  return `${Math.max(1, Math.round(diffMs / 1000))} 秒`;
 }
 
 function getTooltipPosition(x: number, y: number) {
-  const width = 320;
-  const height = 260;
+  const width = 340;
+  const height = 300;
   const padding = 16;
   const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1600;
   const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 900;
 
-  const nextX = Math.min(Math.max(padding, x + 14), viewportWidth - width - padding);
-  const nextY = Math.min(Math.max(padding, y + 14), viewportHeight - height - padding);
-
-  return { left: nextX, top: nextY };
+  return {
+    left: Math.min(Math.max(padding, x + 14), viewportWidth - width - padding),
+    top: Math.min(Math.max(padding, y + 14), viewportHeight - height - padding),
+  };
 }
 
 export function GanttChart({
   tasks,
   viewMode,
   currentDate,
+  currentTime,
   groupBy = 'task',
   robotClients = [],
   robotGroups = [],
   searchTerm = '',
 }: GanttChartProps) {
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const [pageSize, setPageSize] = useState(50);
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const autoScrollKeyRef = useRef('');
+  const now = currentTime || new Date();
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [tasks, groupBy, searchTerm, viewMode]);
+  }, [groupBy, searchTerm, viewMode]);
+
+  useEffect(() => {
+    setTooltip((current) => {
+      if (!current) return current;
+      const freshTask = tasks.find((task) => task.id === current.task.id);
+      if (freshTask) return { ...current, task: freshTask };
+      return current.pinned ? current : null;
+    });
+  }, [tasks]);
 
   useEffect(() => {
     const handleWindowClick = () => {
@@ -154,7 +181,6 @@ export function GanttChart({
   const { startDate, endDate, headers, columns, totalMinutes } = useMemo(() => {
     let start: Date;
     let end: Date;
-    let nextHeaders: { label: string; colSpan: number }[] = [];
     let nextColumns: Date[] = [];
 
     if (viewMode === 'Day') {
@@ -162,65 +188,56 @@ export function GanttChart({
       start.setHours(0, 0, 0, 0);
       end = new Date(currentDate);
       end.setHours(23, 59, 59, 999);
-
       for (let hour = 0; hour < 24; hour += 1) {
         const point = new Date(start);
         point.setHours(hour);
         nextColumns.push(point);
-        nextHeaders.push({ label: `${hour}:00`, colSpan: 1 });
       }
     } else if (viewMode === 'Week') {
       start = startOfWeek(currentDate, { weekStartsOn: 1 });
       end = addDays(start, 6);
       end.setHours(23, 59, 59, 999);
       nextColumns = eachDayOfInterval({ start, end });
-      nextHeaders = nextColumns.map((date) => ({
-        label: format(date, 'M月d日 EEEE', { locale: zhCN }),
-        colSpan: 1,
-      }));
     } else if (viewMode === 'Month') {
       start = startOfMonth(currentDate);
       end = endOfMonth(currentDate);
       end.setHours(23, 59, 59, 999);
       nextColumns = eachDayOfInterval({ start, end });
-      nextHeaders = nextColumns.map((date) => ({
-        label: format(date, 'd日', { locale: zhCN }),
-        colSpan: 1,
-      }));
     } else {
       start = startOfYear(currentDate);
       end = endOfYear(currentDate);
       end.setHours(23, 59, 59, 999);
-
-      let monthStart = start;
       for (let month = 0; month < 12; month += 1) {
-        nextColumns.push(monthStart);
-        nextHeaders.push({
-          label: format(monthStart, 'M月', { locale: zhCN }),
-          colSpan: 1,
-        });
-        monthStart = addDays(endOfMonth(monthStart), 1);
+        const point = new Date(start);
+        point.setMonth(month);
+        nextColumns.push(point);
       }
     }
+
+    const nextHeaders = nextColumns.map((date) => {
+      if (viewMode === 'Day') return { label: format(date, 'H:00'), colSpan: 1 };
+      if (viewMode === 'Week') return { label: format(date, 'M月d日 EEEE', { locale: zhCN }), colSpan: 1 };
+      if (viewMode === 'Month') return { label: format(date, 'd日'), colSpan: 1 };
+      return { label: format(date, 'M月'), colSpan: 1 };
+    });
 
     return {
       startDate: start,
       endDate: end,
       headers: nextHeaders,
       columns: nextColumns,
-      totalMinutes: differenceInMinutes(end, start),
+      totalMinutes: Math.max(1, differenceInMinutes(end, start)),
     };
   }, [currentDate, viewMode]);
 
-  const totalColumns = columns.length;
   const columnWidth = useMemo(() => {
     switch (viewMode) {
       case 'Day':
-        return 120;
+        return 48;
       case 'Week':
-        return 320;
+        return 240;
       case 'Month':
-        return 72;
+        return 56;
       case 'Year':
         return 150;
       default:
@@ -228,41 +245,43 @@ export function GanttChart({
     }
   }, [viewMode]);
 
+  const totalColumns = columns.length;
   const gridMinWidth = totalColumns * columnWidth;
-
-  const minVisibleTaskWidth = useMemo(() => {
-    switch (viewMode) {
-      case 'Day':
-        return 0.75;
-      case 'Week':
-        return 0.5;
-      case 'Month':
-        return 1;
-      case 'Year':
-        return 2;
-      default:
-        return 0.75;
-    }
-  }, [viewMode]);
+  const minVisibleTaskWidth = viewMode === 'Year' ? 2 : viewMode === 'Month' ? 1 : 0.75;
 
   const groupedTasks = useMemo(() => {
+    const createGroup = (
+      groups: Record<string, Omit<TaskGroup, 'executions' | 'totalLanes'> & { executions: ExtendedScheduleTask[] }>,
+      key: string,
+      defaults: Omit<TaskGroup, 'executions' | 'totalLanes'>,
+    ) => {
+      if (!groups[key]) {
+        groups[key] = {
+          ...defaults,
+          id: key,
+          executions: [],
+        };
+      }
+      return groups[key];
+    };
+
     if (groupBy === 'task') {
       const groups: Record<string, Omit<TaskGroup, 'executions' | 'totalLanes'> & { executions: ExtendedScheduleTask[] }> = {};
 
       tasks.forEach((task) => {
-        const key = task.scheduleUuid || `${task.name}_${task.robotName}_${task.clientName}`;
-        if (!groups[key]) {
-          groups[key] = {
-            id: key,
-            name: task.name,
-            robotName: task.robotName || '未知应用',
-            robotNames: task.robotNames,
-            clientName: task.clientName || '未知账号',
-            executions: [],
-          };
-        }
-
-        groups[key].executions.push(task);
+        const key = task.taskGroupKey
+          || task.scheduleUuid
+          || `task_${normalizeGroupKey(task.name)}_${normalizeGroupKey(task.executionScopeLabel || task.clientName || '')}`;
+        const group = createGroup(groups, key, {
+          id: key,
+          name: task.name,
+          robotName: formatCompactNames(task.robotNames || [task.robotName], '未知应用'),
+          robotNames: task.robotNames,
+          clientName: task.clientName || '未知账号',
+          scopeLabel: task.executionScopeLabel || formatCompactNames(task.clientNames || [task.clientName], '未指定执行范围'),
+          groupNames: task.groupNames,
+        });
+        group.executions.push(task);
       });
 
       return Object.values(groups);
@@ -271,55 +290,50 @@ export function GanttChart({
     const groups: Record<string, Omit<TaskGroup, 'executions' | 'totalLanes'> & { executions: ExtendedScheduleTask[] }> = {};
 
     robotClients.forEach((client) => {
-      const key = client.robotClientName;
+      const key = client.robotClientName || client.windowsUserName;
       if (!key) return;
-      groups[key] = {
-        id: key,
+      createGroup(groups, key, {
+        id: `account_${key}`,
         name: key,
         robotName: '-',
         clientName: key,
         isGroup: false,
-        executions: [],
-      };
-    });
-
-    robotGroups.forEach((group) => {
-      const key = group.name;
-      if (!key) return;
-      groups[key] = {
-        id: `group_${key}`,
-        name: key,
-        robotName: '-',
-        clientName: key,
-        isGroup: true,
-        executions: [],
-      };
+      });
     });
 
     tasks.forEach((task) => {
-      const key = task.clientName || '未知账号';
-      if (!groups[key]) {
-        groups[key] = {
-          id: key,
-          name: key,
-          robotName: '-',
-          clientName: key,
-          isGroup: false,
-          executions: [],
-        };
-      }
+      const groupNames = uniqueValues(task.groupNames || []);
+      const actualAccountNames = uniqueValues(task.actualClientNames || []);
+      const accountNames = task.isHistorical && actualAccountNames.length > 0
+        ? actualAccountNames
+        : uniqueValues([...(task.clientNames || []), task.clientName]);
+      const targetRows = [
+        ...groupNames.map((name) => ({ name, isGroup: true })),
+        ...((task.isRealtime || groupNames.length === 0)
+          ? (accountNames.length > 0 ? accountNames : ['未指定账号']).map((name) => ({ name, isGroup: false }))
+          : []),
+      ];
 
-      groups[key].executions.push(task);
+      targetRows.forEach(({ name, isGroup }) => {
+        const group = createGroup(groups, `${isGroup ? 'group' : 'account'}_${name}`, {
+          id: `${isGroup ? 'group' : 'account'}_${name}`,
+          name,
+          robotName: '-',
+          clientName: name,
+          isGroup,
+          isFallbackGroup: false,
+        });
+        group.executions.push(task);
+      });
     });
 
     const result = Object.values(groups);
     if (!searchTerm) return result;
-
-    return result.filter((group) => matchesRobotGroupKeyword(group.name, searchTerm) && group.executions.length > 0);
+    return result.filter((group) => matchesRobotGroupKeyword(group.name, searchTerm));
   }, [groupBy, robotClients, robotGroups, searchTerm, tasks]);
 
-  const groupedTasksWithLanes = useMemo<TaskGroup[]>(() => {
-    return groupedTasks.map((group) => {
+  const groupedTasksWithLanes = useMemo<TaskGroup[]>(
+    () => groupedTasks.map((group) => {
       const visibleExecutions = group.executions
         .filter((task) => task.endDate >= startDate && task.startDate <= endDate)
         .sort((left, right) => left.startDate.getTime() - right.startDate.getTime());
@@ -342,32 +356,61 @@ export function GanttChart({
         executions,
         totalLanes: Math.max(1, lanes.length),
       };
-    });
-  }, [endDate, groupedTasks, startDate]);
+    }).sort((left, right) => {
+      const leftRealtime = left.executions.some((task) => task.isRealtime);
+      const rightRealtime = right.executions.some((task) => task.isRealtime);
+      if (leftRealtime !== rightRealtime) return rightRealtime ? 1 : -1;
+
+      const leftNext = left.executions[0]?.startDate.getTime() ?? Number.MAX_SAFE_INTEGER;
+      const rightNext = right.executions[0]?.startDate.getTime() ?? Number.MAX_SAFE_INTEGER;
+      if (leftNext !== rightNext) return leftNext - rightNext;
+
+      return left.name.localeCompare(right.name, 'zh-CN');
+    }),
+    [endDate, groupedTasks, startDate],
+  );
 
   const paginatedGroups = useMemo(() => {
-    if (groupBy === 'robot') return groupedTasksWithLanes;
+    if (groupBy !== 'task') return groupedTasksWithLanes;
     const start = (currentPage - 1) * pageSize;
     return groupedTasksWithLanes.slice(start, start + pageSize);
   }, [currentPage, groupBy, groupedTasksWithLanes, pageSize]);
 
-  const now = new Date();
+  const totalPages = Math.max(1, Math.ceil(groupedTasksWithLanes.length / pageSize));
+
+  useEffect(() => {
+    setCurrentPage((value) => Math.min(Math.max(1, value), totalPages));
+  }, [totalPages]);
+
   const isNowVisible = now >= startDate && now <= endDate;
   const nowLeftPercent = isNowVisible
     ? ((now.getTime() - startDate.getTime()) / (totalMinutes * 60 * 1000)) * 100
     : -1;
 
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container || !isNowVisible) return;
+
+    const autoScrollKey = `${groupBy}-${viewMode}-${startDate.toISOString()}-${endDate.toISOString()}`;
+    if (autoScrollKeyRef.current === autoScrollKey) return;
+    autoScrollKeyRef.current = autoScrollKey;
+
+    const nowLeftPx = (nowLeftPercent / 100) * gridMinWidth;
+    container.scrollLeft = Math.max(0, nowLeftPx - container.clientWidth * 0.45);
+  }, [endDate, gridMinWidth, groupBy, isNowVisible, nowLeftPercent, startDate, viewMode]);
+
   const getTaskColor = (task: ExtendedScheduleTask) => {
-    if (task.status === 'failed') return 'hsl(0 84% 60%)';
-    if (task.status === 'running') return 'hsl(200 84% 50%)';
-    if (task.status === 'completed') return 'hsl(142 76% 45%)';
+    if (task.isRealtime) return '#1f6feb';
+    if (task.status === 'failed') return '#f85149';
+    if (task.status === 'running') return '#58a6ff';
+    if (task.status === 'completed') return '#3fb950';
 
     let hash = 0;
     for (let index = 0; index < task.name.length; index += 1) {
       hash = task.name.charCodeAt(index) + ((hash << 5) - hash);
     }
 
-    return `hsl(${Math.abs(hash) % 360} 60% 55%)`;
+    return `hsl(${Math.abs(hash) % 360} 58% 52%)`;
   };
 
   const openTooltip = (
@@ -384,19 +427,48 @@ export function GanttChart({
     });
   };
 
+  const tooltipRows = tooltip
+    ? [
+      ['状态', getStatusLabel(tooltip.task.status)],
+      ['类型', getTaskTypeLabel(tooltip.task)],
+      ['应用', tooltip.task.robotName || '未知应用'],
+      ['执行范围', tooltip.task.executionScopeLabel || tooltip.task.clientName || '未指定执行范围'],
+      ...(tooltip.task.groupNames?.length
+        ? [['机器人组', formatCompactNames(tooltip.task.groupNames, '未返回分组')]]
+        : []),
+      ...(tooltip.task.clientNames?.length
+        ? [['账号', formatCompactNames(tooltip.task.clientNames, '未返回账号')]]
+        : []),
+      [tooltip.task.status === 'pending' ? '预计开始时间' : '开始时间', format(tooltip.task.startDate, 'yyyy-MM-dd HH:mm:ss')],
+      [
+        tooltip.task.isRealtime ? '截至当前' : tooltip.task.status === 'pending' ? '预计结束时间' : '结束时间',
+        format(tooltip.task.endDate, 'yyyy-MM-dd HH:mm:ss'),
+      ],
+      [
+        tooltip.task.isRealtime ? '已运行时长' : tooltip.task.status === 'pending' ? '预计运行时长' : '运行时长',
+        formatDuration(tooltip.task.startDate, tooltip.task.endDate),
+      ],
+      ...(tooltip.task.isRealtime && tooltip.task.estimatedEndDate
+        ? [['预计结束时间', format(tooltip.task.estimatedEndDate, 'yyyy-MM-dd HH:mm:ss')]]
+        : tooltip.task.isRealtime
+          ? [['预计结束时间', '暂无历史均值']]
+        : []),
+    ]
+    : [];
+
   return (
-    <div className="flex flex-col w-full border rounded-md bg-white max-h-[calc(100vh-280px)] shadow-sm overflow-hidden">
-      <div className="flex-1 overflow-auto shadow-inner">
-        <div className="min-w-max relative">
-          <div className="flex border-b bg-gray-50 sticky top-0 z-30 shadow-sm">
-            <div className="w-64 shrink-0 border-r p-2 font-semibold text-sm flex items-center bg-gray-50 sticky left-0 z-40">
+    <div className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-md border bg-white shadow-sm dark:border-[#30363d] dark:bg-[#161b22]">
+      <div ref={scrollContainerRef} className="flex-1 overflow-auto shadow-inner">
+        <div className="relative min-w-max">
+          <div className="sticky top-0 z-30 flex border-b bg-gray-50 shadow-sm dark:border-[#30363d] dark:bg-[#21262d]">
+            <div className="sticky left-0 z-40 flex w-72 shrink-0 items-center border-r bg-gray-50 p-2 text-sm font-semibold dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#f0f6fc]">
               任务信息
             </div>
-            <div className="flex-1 flex relative" style={{ minWidth: `${gridMinWidth}px` }}>
+            <div className="relative flex flex-1" style={{ minWidth: `${gridMinWidth}px` }}>
               {headers.map((header, index) => (
                 <div
                   key={index}
-                  className="border-r p-2 text-center text-[11px] font-medium text-gray-500 whitespace-nowrap flex items-center justify-center"
+                  className="flex items-center justify-center whitespace-nowrap border-r p-2 text-center text-[11px] font-medium text-gray-500 dark:border-[#30363d] dark:text-[#8b949e]"
                   style={{ width: `${(header.colSpan / totalColumns) * 100}%` }}
                 >
                   {header.label}
@@ -405,10 +477,10 @@ export function GanttChart({
 
               {isNowVisible && (
                 <div
-                  className="absolute top-0 bottom-0 w-px bg-red-500 z-50 pointer-events-none"
+                  className="pointer-events-none absolute bottom-0 top-0 z-50 w-px bg-red-500"
                   style={{ left: `${nowLeftPercent}%` }}
                 >
-                  <div className="absolute top-1 -translate-x-1/2 bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded shadow-sm whitespace-nowrap">
+                  <div className="absolute top-1 -translate-x-1/2 whitespace-nowrap rounded bg-red-500 px-1.5 py-0.5 text-[10px] text-white shadow-sm">
                     当前
                   </div>
                 </div>
@@ -418,67 +490,64 @@ export function GanttChart({
 
           <div className="relative">
             {paginatedGroups.length === 0 ? (
-              <div className="p-12 text-center text-gray-500 text-sm bg-white">
+              <div className="bg-white p-12 text-center text-sm text-gray-500 dark:bg-[#161b22] dark:text-[#8b949e]">
                 {searchTerm ? '没有找到匹配的账号或任务。' : '该时间段内没有安排任务。'}
               </div>
             ) : (
               paginatedGroups.map((group) => (
-                <div key={group.id} className="flex border-b hover:bg-gray-50 group/row">
-                  <div className="w-64 shrink-0 border-r p-1 px-2 flex flex-col justify-center gap-0.5 bg-white group-hover/row:bg-gray-50 sticky left-0 z-20">
+                <div key={group.id} className="group/row flex border-b hover:bg-gray-50 dark:border-[#30363d] dark:hover:bg-[#21262d]">
+                  <div className="sticky left-0 z-20 flex w-72 shrink-0 flex-col justify-center gap-1 border-r bg-white p-2 px-3 group-hover/row:bg-gray-50 dark:border-[#30363d] dark:bg-[#161b22] dark:group-hover/row:bg-[#21262d]">
                     {groupBy === 'task' ? (
                       <>
-                        <div className="text-xs font-medium truncate text-gray-800" title={group.name}>
+                        <div className="truncate text-xs font-medium text-gray-800 dark:text-[#f0f6fc]" title={group.name}>
                           {group.name}
                         </div>
-                        <div className="flex items-center text-[10px] text-blue-600 truncate relative group/robot">
-                          <AppWindow className="w-3 h-3 mr-1 shrink-0" />
+                        <div className="group/robot relative flex truncate text-[10px] text-blue-600 dark:text-[#58a6ff]">
+                          <AppWindow className="mr-1 h-3 w-3 shrink-0" />
                           <span className="truncate" title={group.robotNames?.join(', ') || group.robotName}>
                             {group.robotName}
                           </span>
-                          {group.robotNames && group.robotNames.length > 1 && (
-                            <div className="hidden group-hover/robot:block absolute left-0 top-full mt-1 p-2 bg-white border rounded shadow-xl z-[100] min-w-[180px] text-gray-700 pointer-events-none">
-                              <div className="font-bold text-[11px] mb-1 border-b pb-1 text-blue-700">
-                                关联应用 ({group.robotNames.length})
-                              </div>
-                              <div className="max-h-48 overflow-y-auto">
-                                {group.robotNames.map((name, index) => (
-                                  <div key={index} className="py-1 text-[10px] border-b border-gray-50 last:border-0">
-                                    {name}
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
                         </div>
-                        <div className="flex items-center text-[10px] text-green-600 truncate" title={`账号: ${group.clientName}`}>
-                          <Bot className="w-3 h-3 mr-1 shrink-0" />
-                          <span className="truncate">{group.clientName}</span>
+                        <div className="flex truncate text-[10px] text-green-600 dark:text-[#3fb950]" title={group.scopeLabel || group.clientName}>
+                          {group.groupNames?.length ? (
+                            <Users className="mr-1 h-3 w-3 shrink-0" />
+                          ) : (
+                            <Bot className="mr-1 h-3 w-3 shrink-0" />
+                          )}
+                          <span className="truncate">{group.scopeLabel || group.clientName}</span>
                         </div>
                       </>
                     ) : (
                       <>
-                        <div className="flex items-center text-xs font-medium text-gray-800 truncate" title={group.name}>
-                          {group.isGroup ? (
-                            <Users className="w-3 h-3 mr-1 shrink-0 text-purple-600" />
+                        <div className="flex truncate text-xs font-medium text-gray-800 dark:text-[#f0f6fc]" title={group.name}>
+                          {group.isGroup && !group.isFallbackGroup ? (
+                            <Users className="mr-1 h-3 w-3 shrink-0 text-purple-600 dark:text-[#a371f7]" />
                           ) : (
-                            <Bot className="w-3 h-3 mr-1 shrink-0 text-green-600" />
+                            <Bot className="mr-1 h-3 w-3 shrink-0 text-green-600 dark:text-[#3fb950]" />
                           )}
                           <span className="truncate">{group.name}</span>
                         </div>
-                        <div className="text-[10px] text-gray-500">任务数量: {group.executions.length}</div>
+                        <div className="text-[10px] text-gray-500 dark:text-[#8b949e]">
+                          {group.isGroup ? '机器人组任务' : '任务数量'}: {group.executions.length}
+                          {group.executions.some((task) => task.status === 'running') && (
+                            <span className="ml-1 text-blue-600 dark:text-[#58a6ff]">
+                              执行中 {group.executions.filter((task) => task.status === 'running').length}
+                            </span>
+                          )}
+                        </div>
                       </>
                     )}
                   </div>
 
                   <div
-                    className="flex-1 relative"
-                    style={{ minHeight: `${Math.max(40, group.totalLanes * 20 + 8)}px`, minWidth: `${gridMinWidth}px` }}
+                    className="relative flex-1"
+                    style={{ minHeight: `${Math.max(42, group.totalLanes * 18 + 10)}px`, minWidth: `${gridMinWidth}px` }}
                   >
-                    <div className="absolute inset-0 flex pointer-events-none">
+                    <div className="pointer-events-none absolute inset-0 flex">
                       {columns.map((_, index) => (
                         <div
                           key={index}
-                          className="border-r h-full border-gray-100"
+                          className="h-full border-r border-gray-100 dark:border-[#30363d]"
                           style={{ width: `${(1 / totalColumns) * 100}%` }}
                         />
                       ))}
@@ -486,7 +555,7 @@ export function GanttChart({
 
                     {isNowVisible && (
                       <div
-                        className="absolute top-0 bottom-0 w-px bg-red-500/50 z-20 pointer-events-none"
+                        className="pointer-events-none absolute bottom-0 top-0 z-20 w-px bg-red-500/50"
                         style={{ left: `${nowLeftPercent}%` }}
                       />
                     )}
@@ -495,26 +564,30 @@ export function GanttChart({
                       const visibleStart = task.startDate < startDate ? startDate : task.startDate;
                       const visibleEnd = task.endDate > endDate ? endDate : task.endDate;
                       const totalMs = Math.max(1, totalMinutes * 60 * 1000);
-                      const leftPx = Math.max(0, ((visibleStart.getTime() - startDate.getTime()) / totalMs) * gridMinWidth);
+                      const rawLeftPx = Math.max(0, ((visibleStart.getTime() - startDate.getTime()) / totalMs) * gridMinWidth);
+                      const rightPx = Math.min(gridMinWidth, ((visibleEnd.getTime() - startDate.getTime()) / totalMs) * gridMinWidth);
                       const rawWidthPx = Math.max(0, ((visibleEnd.getTime() - visibleStart.getTime()) / totalMs) * gridMinWidth);
+                      const realtimeMinWidth = task.isRealtime ? 8 : minVisibleTaskWidth;
                       const widthPx = Math.min(
-                        Math.max(minVisibleTaskWidth, rawWidthPx),
-                        Math.max(minVisibleTaskWidth, gridMinWidth - leftPx),
+                        Math.max(realtimeMinWidth, rawWidthPx),
+                        Math.max(realtimeMinWidth, gridMinWidth - rawLeftPx),
                       );
+                      const leftPx = task.isRealtime ? Math.max(0, rightPx - widthPx) : rawLeftPx;
                       const labelMinWidth = viewMode === 'Day' ? 28 : 40;
 
                       return (
                         <div
                           key={task.id}
                           className={cn(
-                            'absolute h-4 rounded-sm shadow-sm flex items-center px-1 text-[9px] text-white truncate transition-all cursor-pointer hover:z-30 hover:ring-2 hover:ring-offset-1 hover:ring-indigo-400',
+                            'absolute flex h-4 cursor-pointer items-center truncate rounded-sm px-1 text-[9px] text-white shadow-sm transition-all hover:z-30 hover:ring-2 hover:ring-blue-400 hover:ring-offset-1 dark:hover:ring-offset-[#0d1117]',
+                            task.isRealtime && 'h-5 rounded-md shadow-md ring-2 ring-blue-300/70 animate-pulse dark:ring-[#58a6ff]/80',
                             task.status === 'running' && 'animate-pulse ring-1 ring-blue-400',
-                            task.status === 'pending' ? 'opacity-70 border border-dashed border-white/30' : 'opacity-100',
+                            task.status === 'pending' ? 'border border-dashed border-white/30 opacity-70' : 'opacity-100',
                           )}
                           style={{
                             left: `${leftPx}px`,
                             width: `${widthPx}px`,
-                            top: `${4 + task.lane * 20}px`,
+                            top: `${4 + task.lane * 18}px`,
                             backgroundColor: getTaskColor(task),
                           }}
                           onMouseEnter={(event) => openTooltip(task, event, false)}
@@ -537,8 +610,7 @@ export function GanttChart({
                             openTooltip(task, event, true);
                           }}
                         >
-                          {rawWidthPx >= labelMinWidth &&
-                            format(task.startDate, viewMode === 'Day' ? 'HH:mm' : 'MM-dd HH:mm')}
+                          {rawWidthPx >= labelMinWidth && format(task.startDate, viewMode === 'Day' ? 'HH:mm' : 'MM-dd HH:mm')}
                         </div>
                       );
                     })}
@@ -551,13 +623,13 @@ export function GanttChart({
       </div>
 
       {groupBy === 'task' && groupedTasksWithLanes.length > 0 && (
-        <div className="flex items-center justify-between px-4 py-2 border-t bg-white z-30 shadow-[0_-2px_10px_rgba(0,0,0,0.05)]">
-          <div className="flex items-center text-xs text-gray-500">共 {groupedTasksWithLanes.length} 条记录</div>
+        <div className="z-30 flex items-center justify-between border-t bg-white px-4 py-2 shadow-[0_-2px_10px_rgba(0,0,0,0.05)] dark:border-[#30363d] dark:bg-[#161b22]">
+          <div className="flex items-center text-xs text-gray-500 dark:text-[#8b949e]">共 {groupedTasksWithLanes.length} 条记录</div>
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500">每页显示</span>
+              <span className="text-xs text-gray-500 dark:text-[#8b949e]">每页显示</span>
               <select
-                className="border rounded px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-indigo-500"
+                className="rounded border px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-indigo-500 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-[#c9d1d9]"
                 value={pageSize}
                 onChange={(event) => {
                   setPageSize(Number(event.target.value));
@@ -570,25 +642,25 @@ export function GanttChart({
                   </option>
                 ))}
               </select>
-              <span className="text-xs text-gray-500">条</span>
+              <span className="text-xs text-gray-500 dark:text-[#8b949e]">条</span>
             </div>
             <div className="flex items-center gap-2">
               <button
-                className="p-1 border rounded hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="rounded border p-1 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-[#30363d] dark:hover:bg-[#21262d]"
                 disabled={currentPage === 1}
                 onClick={() => setCurrentPage((value) => Math.max(1, value - 1))}
               >
-                <ChevronLeft className="w-4 h-4" />
+                <ChevronLeft className="h-4 w-4" />
               </button>
-              <span className="text-xs text-gray-600">
-                {currentPage} / {Math.ceil(groupedTasksWithLanes.length / pageSize)}
+              <span className="text-xs text-gray-600 dark:text-[#c9d1d9]">
+                {currentPage} / {totalPages}
               </span>
               <button
-                className="p-1 border rounded hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                disabled={currentPage >= Math.ceil(groupedTasksWithLanes.length / pageSize)}
+                className="rounded border p-1 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-[#30363d] dark:hover:bg-[#21262d]"
+                disabled={currentPage >= totalPages}
                 onClick={() => setCurrentPage((value) => value + 1)}
               >
-                <ChevronRight className="w-4 h-4" />
+                <ChevronRight className="h-4 w-4" />
               </button>
             </div>
           </div>
@@ -597,63 +669,44 @@ export function GanttChart({
 
       {tooltip && (
         <div
-          className="fixed z-[120] w-80 rounded-xl border border-gray-200 bg-white/95 backdrop-blur shadow-2xl"
+          className={cn(
+            'fixed z-[120] w-[340px] rounded-xl border border-gray-200 bg-white/95 shadow-2xl backdrop-blur dark:border-[#30363d] dark:bg-[#161b22]/95',
+            !tooltip.pinned && 'pointer-events-none',
+          )}
           style={getTooltipPosition(tooltip.x, tooltip.y)}
           onClick={(event) => event.stopPropagation()}
         >
-          <div className="flex items-start justify-between gap-3 border-b border-gray-100 px-4 py-3">
+          <div className="flex items-start justify-between gap-3 border-b border-gray-100 px-4 py-3 dark:border-[#30363d]">
             <div>
-              <div className="text-sm font-semibold text-gray-900 break-words">{tooltip.task.name}</div>
-              <div className="mt-1 text-xs text-gray-500">
+              <div className="break-words text-sm font-semibold text-gray-900 dark:text-[#f0f6fc]">{tooltip.task.name}</div>
+              <div className="mt-1 text-xs text-gray-500 dark:text-[#8b949e]">
                 {getTaskTypeLabel(tooltip.task)} · {getStatusLabel(tooltip.task.status)}
               </div>
             </div>
             <button
-              className="rounded-md p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+              className="rounded-md p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-[#21262d] dark:hover:text-[#c9d1d9]"
               onClick={() => setTooltip(null)}
             >
               <X className="h-4 w-4" />
             </button>
           </div>
 
-          <div className="space-y-2 px-4 py-3 text-xs text-gray-700">
-            <div className="flex justify-between gap-3">
-              <span className="text-gray-500">状态</span>
-              <span className="font-medium text-gray-900">{getStatusLabel(tooltip.task.status)}</span>
-            </div>
-            <div className="flex justify-between gap-3">
-              <span className="text-gray-500">类型</span>
-              <span className="font-medium text-gray-900">{getTaskTypeLabel(tooltip.task)}</span>
-            </div>
-            <div className="flex justify-between gap-3">
-              <span className="text-gray-500">应用</span>
-              <span className="font-medium text-right text-gray-900">{tooltip.task.robotName || '未知应用'}</span>
-            </div>
-            <div className="flex justify-between gap-3">
-              <span className="text-gray-500">账号</span>
-              <span className="font-medium text-right text-gray-900">{tooltip.task.clientName || '未知账号'}</span>
-            </div>
-            <div className="flex justify-between gap-3">
-              <span className="text-gray-500">开始时间</span>
-              <span className="font-medium text-right text-gray-900">{format(tooltip.task.startDate, 'yyyy-MM-dd HH:mm:ss')}</span>
-            </div>
-            <div className="flex justify-between gap-3">
-              <span className="text-gray-500">结束时间</span>
-              <span className="font-medium text-right text-gray-900">{format(tooltip.task.endDate, 'yyyy-MM-dd HH:mm:ss')}</span>
-            </div>
-            <div className="flex justify-between gap-3">
-              <span className="text-gray-500">运行时长</span>
-              <span className="font-medium text-right text-gray-900">{formatDuration(tooltip.task.startDate, tooltip.task.endDate)}</span>
-            </div>
+          <div className="space-y-2 px-4 py-3 text-xs text-gray-700 dark:text-[#c9d1d9]">
+            {tooltipRows.map(([label, value]) => (
+              <div key={label} className="flex justify-between gap-3">
+                <span className="text-gray-500 dark:text-[#8b949e]">{label}</span>
+                <span className="text-right font-medium text-gray-900 dark:text-[#f0f6fc]">{value}</span>
+              </div>
+            ))}
             {tooltip.task.cronExpr && (
               <div className="flex justify-between gap-3">
-                <span className="text-gray-500">调度规则</span>
-                <span className="font-medium text-right text-gray-900 break-all">{tooltip.task.cronExpr}</span>
+                <span className="text-gray-500 dark:text-[#8b949e]">调度规则</span>
+                <span className="break-all text-right font-medium text-gray-900 dark:text-[#f0f6fc]">{tooltip.task.cronExpr}</span>
               </div>
             )}
           </div>
 
-          <div className="border-t border-gray-100 px-4 py-2 text-[11px] text-gray-500">
+          <div className="border-t border-gray-100 px-4 py-2 text-[11px] text-gray-500 dark:border-[#30363d] dark:text-[#8b949e]">
             {tooltip.pinned ? '已固定详情，点击当前颗粒或右上角关闭。' : '悬浮查看详情，点击颗粒可固定打开。'}
           </div>
         </div>

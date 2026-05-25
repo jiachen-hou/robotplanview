@@ -634,7 +634,7 @@ export function GanttChart({
     updateTooltipPosition();
     window.addEventListener('resize', updateTooltipPosition);
     return () => window.removeEventListener('resize', updateTooltipPosition);
-  }, [tooltip?.key, tooltip?.x, tooltip?.y, tooltip?.tasks.length, tooltipRows.length]);
+  }, [tooltip?.key, tooltip?.x, tooltip?.y, tooltip?.pinned, tooltip?.tasks.length, tooltipRows.length]);
 
   return (
     <div className="w-full overflow-visible rounded-md border bg-white shadow-sm dark:border-[#30363d] dark:bg-[#161b22]">

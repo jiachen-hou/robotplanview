@@ -15,7 +15,7 @@ import {
 } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import CronExpressionParser from 'cron-parser';
-import { Loader2, Calendar as CalendarIcon, KeyRound, RefreshCw, Bot, ChevronLeft, ChevronRight, Moon, Sun, Info } from 'lucide-react';
+import { Loader2, Calendar as CalendarIcon, KeyRound, RefreshCw, Bot, ChevronLeft, ChevronRight, Moon, Sun, Users } from 'lucide-react';
 
 import { GanttChart, ScheduleTask, ViewMode } from '@/components/GanttChart';
 import { Button } from '@/components/ui/button';
@@ -191,6 +191,7 @@ type QueueStatusFilter = 'all' | 'running' | 'queued';
 type RobotStatusFilter = 'all' | 'running' | 'idle' | 'allocated' | 'connected' | 'offline' | 'unknown';
 type TimelineGroupBy = 'task' | 'account';
 type ThemeMode = 'light' | 'dark';
+type DashboardPage = 'overview' | 'realtime' | 'gantt';
 
 interface LoadingProgress {
   phase: 'idle' | 'auth' | 'catalog' | 'hydrating' | 'rendering';
@@ -229,6 +230,8 @@ export interface ExtendedScheduleTask extends ScheduleTask {
   robotNames?: string[];
   clientName?: string;
   clientNames?: string[];
+  actualClientNames?: string[];
+  configuredClientNames?: string[];
   groupNames?: string[];
   executionScopeType?: 'account' | 'group' | 'mixed' | 'realtime' | 'unknown';
   executionScopeLabel?: string;
@@ -246,6 +249,25 @@ interface RealtimeTaskScope {
   groupNames: string[];
   executionScopeType: ExtendedScheduleTask['executionScopeType'];
   executionScopeLabel: string;
+}
+
+interface OverviewScopeCell {
+  date: Date;
+  total: number;
+  running: number;
+  queued: number;
+  completed: number;
+}
+
+interface OverviewScopeRow {
+  id: string;
+  name: string;
+  isGroup: boolean;
+  total: number;
+  running: number;
+  queued: number;
+  completed: number;
+  cells: OverviewScopeCell[];
 }
 
 const SCHEDULE_PAGE_SIZE = 200;
@@ -302,6 +324,31 @@ function findByLookupKey<T>(lookupMap: ReadonlyMap<string, T>, value?: string | 
   if (!key) return undefined;
   return lookupMap.get(key)
     || [...lookupMap.entries()].find(([name]) => name.includes(key) || key.includes(name))?.[1];
+}
+
+function getTaskActualAccountNames(task: ExtendedScheduleTask): string[] {
+  const actualNames = uniqueStrings(task.actualClientNames || []);
+  if (actualNames.length > 0) return actualNames;
+
+  return uniqueStrings([...(task.clientNames || []), task.clientName]);
+}
+
+function getTaskOverviewScopes(task: ExtendedScheduleTask): Array<{ name: string; isGroup: boolean }> {
+  const groupNames = uniqueStrings(task.groupNames || []);
+  if (groupNames.length > 0) {
+    return groupNames.map((name) => ({ name, isGroup: true }));
+  }
+
+  const accountNames = getTaskActualAccountNames(task);
+  if (accountNames.length > 0) {
+    return accountNames.map((name) => ({ name, isGroup: false }));
+  }
+
+  return [{ name: '未指定账号', isGroup: false }];
+}
+
+function taskOverlapsRange(task: ExtendedScheduleTask, start: Date, end: Date): boolean {
+  return task.startDate <= end && task.endDate >= start;
 }
 
 function getScheduleGroupNames(detail: Partial<ScheduleDetail>): string[] {
@@ -591,6 +638,7 @@ export default function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>('light');
   const [clockNow, setClockNow] = useState(() => new Date());
 
+  const [dashboardPage, setDashboardPage] = useState<DashboardPage>('overview');
   const [viewMode, setViewMode] = useState<ViewMode>('Week');
   const [groupBy, setGroupBy] = useState<TimelineGroupBy>('task');
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -925,6 +973,7 @@ export default function App() {
       row.runningTasks.sort((left, right) =>
         (parseDateValue(right.startedAt)?.getTime() || 0) - (parseDateValue(left.startedAt)?.getTime() || 0),
       );
+      row.runningTasks = row.runningTasks.slice(0, 1);
       row.queuedTasks.sort((left, right) =>
         (parseDateValue(left.updatedAt)?.getTime() || 0) - (parseDateValue(right.updatedAt)?.getTime() || 0),
       );
@@ -1092,6 +1141,8 @@ export default function App() {
           : isRunningStatus(run.status)
             ? 'running'
             : 'failed';
+        const actualClientNames = uniqueStrings(run.clientNames);
+        const historicalClientNames = actualClientNames.length > 0 ? actualClientNames : clientNames;
 
         nextTasks.push({
           id: `hist-${item.scheduleUuid}-${run.id}`,
@@ -1101,8 +1152,10 @@ export default function App() {
           status,
           robotName,
           robotNames: uniqueStrings([...robotNames, ...run.robotNames]),
-          clientName,
-          clientNames: uniqueStrings([...clientNames, ...run.clientNames]),
+          clientName: historicalClientNames[0] || clientName,
+          clientNames: historicalClientNames,
+          actualClientNames,
+          configuredClientNames: configuredAccountNames,
           groupNames,
           executionScopeType,
           executionScopeLabel,
@@ -1127,6 +1180,7 @@ export default function App() {
               robotNames,
               clientName,
               clientNames,
+              configuredClientNames: configuredAccountNames,
               groupNames,
               executionScopeType,
               executionScopeLabel,
@@ -1171,6 +1225,7 @@ export default function App() {
             robotNames,
             clientName,
             clientNames,
+            configuredClientNames: configuredAccountNames,
             groupNames,
             executionScopeType,
             executionScopeLabel,
@@ -1194,6 +1249,7 @@ export default function App() {
               robotNames,
               clientName,
               clientNames,
+              configuredClientNames: configuredAccountNames,
               groupNames,
               executionScopeType,
               executionScopeLabel,
@@ -1684,6 +1740,7 @@ export default function App() {
             robotNames: uniqueStrings([task.robotName]),
             clientName: row.accountName,
             clientNames: [row.accountName],
+            actualClientNames: [row.accountName],
             groupNames,
             executionScopeType,
             executionScopeLabel,
@@ -1703,6 +1760,88 @@ export default function App() {
     () => [...tasks, ...realtimeRunningTimelineTasks],
     [realtimeRunningTimelineTasks, tasks],
   );
+
+  const overviewDays = useMemo(() => {
+    const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
+    return Array.from({ length: 7 }, (_, index) => addDays(weekStart, index));
+  }, [currentDate]);
+
+  const overviewRows = useMemo<OverviewScopeRow[]>(() => {
+    const weekStart = overviewDays[0];
+    const weekEnd = addDays(weekStart, 7);
+    weekEnd.setMilliseconds(weekEnd.getMilliseconds() - 1);
+    const rows = new Map<string, OverviewScopeRow>();
+
+    const ensureRow = (name: string, isGroup: boolean) => {
+      const id = `${isGroup ? 'group' : 'account'}:${normalizeLookupKey(name)}`;
+      if (!rows.has(id)) {
+        rows.set(id, {
+          id,
+          name,
+          isGroup,
+          total: 0,
+          running: 0,
+          queued: 0,
+          completed: 0,
+          cells: overviewDays.map((date) => ({
+            date,
+            total: 0,
+            running: 0,
+            queued: 0,
+            completed: 0,
+          })),
+        });
+      }
+
+      return rows.get(id)!;
+    };
+
+    timelineTasks.forEach((task) => {
+      if (!taskOverlapsRange(task, weekStart, weekEnd)) return;
+
+      getTaskOverviewScopes(task).forEach((scope) => {
+        const row = ensureRow(scope.name, scope.isGroup);
+        row.total += 1;
+        if (task.status === 'running') row.running += 1;
+        if (task.status === 'pending') row.queued += 1;
+        if (task.status === 'completed') row.completed += 1;
+
+        row.cells.forEach((cell) => {
+          const dayStart = new Date(cell.date);
+          const dayEnd = addDays(dayStart, 1);
+          dayEnd.setMilliseconds(dayEnd.getMilliseconds() - 1);
+          if (!taskOverlapsRange(task, dayStart, dayEnd)) return;
+
+          cell.total += 1;
+          if (task.status === 'running') cell.running += 1;
+          if (task.status === 'pending') cell.queued += 1;
+          if (task.status === 'completed') cell.completed += 1;
+        });
+      });
+    });
+
+    return [...rows.values()].sort((left, right) => {
+      if (right.running !== left.running) return right.running - left.running;
+      if (right.queued !== left.queued) return right.queued - left.queued;
+      if (right.total !== left.total) return right.total - left.total;
+      return left.name.localeCompare(right.name, 'zh-CN');
+    });
+  }, [overviewDays, timelineTasks]);
+
+  const maxOverviewCellCount = useMemo(
+    () => Math.max(1, ...overviewRows.flatMap((row) => row.cells.map((cell) => cell.total))),
+    [overviewRows],
+  );
+
+  const openGanttForScope = (scopeName: string, date?: Date) => {
+    setSearchTerm(scopeName);
+    setGroupBy('account');
+    if (date) {
+      setCurrentDate(date);
+      setViewMode('Day');
+    }
+    setDashboardPage('gantt');
+  };
 
   const filteredTasks = useMemo(() => {
     if (!searchTerm.trim()) return timelineTasks;
@@ -1828,46 +1967,46 @@ export default function App() {
   ];
 
   const realtimeQueuePanel = (
-    <Card className="flex min-h-[920px] w-full shrink-0 flex-col shadow-sm border-gray-200 dark:border-[#30363d] dark:bg-[#161b22] xl:w-[440px]">
-      <CardHeader className="pb-3 border-b dark:border-[#30363d]">
-        <CardTitle className="text-base">实时任务看板</CardTitle>
-        <CardDescription>
-          查看机器人账号当前是否在执行、排队或空闲。
-        </CardDescription>
+    <Card className="flex h-[calc(100vh-180px)] min-h-[640px] w-full min-w-0 flex-col overflow-hidden border-gray-200 shadow-sm dark:border-[#30363d] dark:bg-[#161b22]">
+      <CardHeader className="shrink-0 border-b px-4 py-3 dark:border-[#30363d]">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
+            <CardTitle className="text-base">实时任务看板</CardTitle>
+            <span className="text-xs text-gray-500 dark:text-[#8b949e]">
+              {filteredRealtimeQueueRows.length} 个账号符合当前筛选
+            </span>
+          </div>
+          <div className="flex shrink-0 items-center gap-1 text-[11px]">
+            <span className="rounded-full bg-blue-50 px-2 py-0.5 font-medium text-blue-700 dark:bg-blue-950/60 dark:text-blue-200">
+              执行 {realtimeQueueStats.running}
+            </span>
+            <span className="rounded-full bg-amber-50 px-2 py-0.5 font-medium text-amber-700 dark:bg-amber-950/50 dark:text-amber-200">
+              排队 {realtimeQueueStats.queued}
+            </span>
+          </div>
+        </div>
       </CardHeader>
+
       <CardContent className="flex min-h-0 flex-1 flex-col p-0">
-        <div className="space-y-3 border-b border-gray-100 p-3 dark:border-[#30363d]">
-          <div className="grid grid-cols-3 gap-2">
-            <div className="rounded-md bg-slate-50 px-2.5 py-2 dark:bg-[#21262d]">
-              <div className="text-[11px] text-gray-500 dark:text-[#8b949e]">账号</div>
-              <div className="text-lg font-semibold text-gray-900 dark:text-[#f0f6fc]">{realtimeQueueStats.accounts}</div>
-            </div>
-            <div className="rounded-md bg-blue-50 px-2.5 py-2 dark:bg-[#1f6feb26]">
-              <div className="text-[11px] text-blue-600 dark:text-[#58a6ff]">执行中</div>
-              <div className="text-lg font-semibold text-blue-900 dark:text-[#79c0ff]">{realtimeQueueStats.running}</div>
-            </div>
-            <div className="rounded-md bg-amber-50 px-2.5 py-2 dark:bg-[#9e6a0326]">
-              <div className="text-[11px] text-amber-600 dark:text-[#d29922]">排队中</div>
-              <div className="text-lg font-semibold text-amber-900 dark:text-[#f2cc60]">{realtimeQueueStats.queued}</div>
-            </div>
+        <div className="shrink-0 space-y-2 border-b border-gray-100 bg-white p-3 dark:border-[#30363d] dark:bg-[#161b22]">
+          <div className="grid gap-2 lg:grid-cols-[minmax(240px,1fr)_360px]">
+            <Input
+              placeholder="筛选账号、机器名或任务..."
+              value={queueSearchTerm}
+              onChange={(event) => setQueueSearchTerm(event.target.value)}
+              className="h-8"
+            />
+
+            <Tabs value={queueStatusFilter} onValueChange={(value) => setQueueStatusFilter(value as QueueStatusFilter)}>
+              <TabsList className="grid h-8 w-full grid-cols-3">
+                <TabsTrigger value="all" className="h-7 text-xs">全部</TabsTrigger>
+                <TabsTrigger value="running" className="h-7 text-xs">执行中</TabsTrigger>
+                <TabsTrigger value="queued" className="h-7 text-xs">排队中</TabsTrigger>
+              </TabsList>
+            </Tabs>
           </div>
 
-          <Input
-            placeholder="筛选账号、机器名或任务..."
-            value={queueSearchTerm}
-            onChange={(event) => setQueueSearchTerm(event.target.value)}
-            className="h-8"
-          />
-
-          <Tabs value={queueStatusFilter} onValueChange={(value) => setQueueStatusFilter(value as QueueStatusFilter)}>
-            <TabsList className="grid w-full grid-cols-3">
-              <TabsTrigger value="all">全部</TabsTrigger>
-              <TabsTrigger value="running">有执行任务</TabsTrigger>
-              <TabsTrigger value="queued">有排队任务</TabsTrigger>
-            </TabsList>
-          </Tabs>
-
-          <div className="flex flex-wrap gap-1.5">
+          <div className="flex max-h-14 flex-wrap gap-1.5 overflow-y-auto pr-1">
             {robotStatusFilters.map((item) => (
               <button
                 key={item.value}
@@ -1890,104 +2029,360 @@ export default function App() {
         </div>
 
         {filteredRealtimeQueueRows.length > 0 ? (
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            {filteredRealtimeQueueRows.map((row) => {
-              const currentTask = row.runningTasks[0];
-              const currentTaskScope = getRealtimeTaskScope(currentTask);
+          <div className="min-h-0 flex-1 overflow-y-auto bg-gray-50/70 p-3 dark:bg-[#0d1117]">
+            <div className="grid gap-2.5 xl:grid-cols-2 2xl:grid-cols-3">
+              {filteredRealtimeQueueRows.map((row) => {
+                const currentTask = row.runningTasks[0];
+                const scopedTasks = [...row.runningTasks, ...row.queuedTasks];
+                const rowScopeNames = uniqueStrings(
+                  scopedTasks.flatMap((task) => getRealtimeTaskScope(task)?.groupNames || []),
+                );
+                const getQueueTaskIdentity = (task: RealtimeQueueTask) => {
+                  const scopeNames = getRealtimeTaskScope(task)?.groupNames || [];
+                  return `${normalizeLookupKey(task.taskName)}|${scopeNames.join('|')}`;
+                };
+                const visibleQueuedTasks = row.queuedTasks.filter((task, index, list) =>
+                  list.findIndex((item) => getQueueTaskIdentity(item) === getQueueTaskIdentity(task)) === index,
+                );
+                const duplicateQueuedCount = row.queuedTasks.length - visibleQueuedTasks.length;
 
-              return (
-              <div key={row.accountKey} className="border-b border-gray-100 px-3 py-2.5 last:border-b-0 dark:border-slate-700">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium text-gray-900 dark:text-slate-50">{row.accountName}</div>
-                    <div className="mt-1 text-xs text-gray-500 dark:text-slate-400">{row.machineName || '未返回机器名'}</div>
-                  </div>
-                  <span className={cn(
-                    'shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium',
-                    row.robotStatus === 'running' && 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-200',
-                    row.robotStatus === 'idle' && 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-200',
-                    row.robotStatus === 'offline' && 'bg-gray-100 text-gray-600 dark:bg-slate-800 dark:text-slate-300',
-                    row.robotStatus === 'allocated' && 'bg-amber-50 text-amber-700 dark:bg-amber-950/50 dark:text-amber-200',
-                    !row.robotStatus && 'bg-gray-100 text-gray-600 dark:bg-slate-800 dark:text-slate-300',
-                  )}>
-                    {row.robotStatusLabel}
-                  </span>
-                </div>
+                return (
+                  <div
+                    key={row.accountKey}
+                    className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm dark:border-[#30363d] dark:bg-[#161b22]"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <div className="truncate text-sm font-semibold text-gray-950 dark:text-slate-50">{row.accountName}</div>
+                          <span className={cn(
+                            'shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium',
+                            row.robotStatus === 'running' && 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-200',
+                            row.robotStatus === 'idle' && 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-200',
+                            row.robotStatus === 'offline' && 'bg-gray-100 text-gray-600 dark:bg-slate-800 dark:text-slate-300',
+                            row.robotStatus === 'allocated' && 'bg-amber-50 text-amber-700 dark:bg-amber-950/50 dark:text-amber-200',
+                            !row.robotStatus && 'bg-gray-100 text-gray-600 dark:bg-slate-800 dark:text-slate-300',
+                          )}>
+                            {row.robotStatusLabel}
+                          </span>
+                        </div>
+                        <div className="mt-1 truncate text-xs text-gray-500 dark:text-slate-400">
+                          {row.machineName || '未返回机器名'}
+                        </div>
+                        {rowScopeNames.length > 0 && (
+                          <div className="mt-1 truncate text-[11px] font-medium text-purple-700 dark:text-purple-200">
+                            机器人组：{formatNamesForLabel(rowScopeNames, '未返回分组')}
+                          </div>
+                        )}
+                      </div>
 
-                <div className="mt-2 grid grid-cols-2 gap-2">
-                  <div className="rounded-md bg-blue-50 px-2.5 py-1.5 dark:bg-blue-950/50">
-                    <div className="text-[11px] text-blue-600 dark:text-blue-300">执行中任务</div>
-                    <div className="text-base font-semibold text-blue-900 dark:text-blue-100">{row.runningTasks.length}</div>
-                  </div>
-                  <div className="rounded-md bg-amber-50 px-2.5 py-1.5 dark:bg-amber-950/40">
-                    <div className="text-[11px] text-amber-600 dark:text-amber-300">排队中</div>
-                    <div className="text-base font-semibold text-amber-900 dark:text-amber-100">{row.queuedTasks.length}</div>
-                  </div>
-                </div>
-
-                {currentTask && (
-                  <div className="mt-2 rounded-md bg-gray-50 px-3 py-2 dark:bg-slate-800">
-                    <div className="text-[11px] text-gray-500 dark:text-slate-400">当前任务</div>
-                    <div className="mt-1 text-xs font-medium text-gray-900 break-words dark:text-slate-50">
-                      {currentTask.taskName}
+                      <div className="grid shrink-0 grid-cols-2 overflow-hidden rounded-md border border-gray-100 text-center text-[11px] dark:border-[#30363d]">
+                        <div className="min-w-12 bg-blue-50 px-2 py-1 text-blue-700 dark:bg-blue-950/50 dark:text-blue-200">
+                          <div className="font-semibold">{row.runningTasks.length}</div>
+                          <div>执行</div>
+                        </div>
+                        <div className="min-w-12 bg-amber-50 px-2 py-1 text-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
+                          <div className="font-semibold">{row.queuedTasks.length}</div>
+                          <div>排队</div>
+                        </div>
+                      </div>
                     </div>
-                    {currentTaskScope?.groupNames.length ? (
-                      <div className="mt-1 text-[11px] font-medium text-purple-700 dark:text-purple-200">
-                        机器人组：{formatNamesForLabel(currentTaskScope.groupNames, '未返回分组')}
+
+                    {currentTask ? (
+                      <div className="mt-3 rounded-md bg-slate-50 px-3 py-2 dark:bg-slate-800">
+                        <div className="grid grid-cols-[44px_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs">
+                          <div className="text-gray-500 dark:text-slate-400">当前</div>
+                          <div className="break-words font-medium text-gray-950 dark:text-slate-50">
+                            {currentTask.taskName}
+                          </div>
+                          {currentTask.startedAt && (
+                            <>
+                              <div className="text-gray-500 dark:text-slate-400">开始</div>
+                              <div className="text-gray-500 dark:text-slate-400">
+                                {format(parseDateValue(currentTask.startedAt) || new Date(), 'MM-dd HH:mm:ss')}
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    ) : row.robotStatus === 'running' ? (
+                      <div className="mt-3 rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-[11px] text-blue-700 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-200">
+                        机器人运行中，但队列接口暂未返回具体任务。
                       </div>
                     ) : null}
-                    {currentTask.startedAt && (
-                      <div className="mt-1 text-[11px] text-gray-500 dark:text-slate-400">
-                        开始于 {format(parseDateValue(currentTask.startedAt) || new Date(), 'MM-dd HH:mm:ss')}
+
+                    {visibleQueuedTasks.length > 0 && (
+                      <div className="mt-3 space-y-1.5">
+                        {visibleQueuedTasks.slice(0, 2).map((task) => (
+                          <div key={task.taskUuid} className="rounded-md border border-gray-100 bg-white px-3 py-2 text-xs dark:border-slate-700 dark:bg-[#0d1117]">
+                            <div className="grid grid-cols-[44px_minmax(0,1fr)] gap-x-2 gap-y-1">
+                              <div className="text-amber-700 dark:text-amber-200">排队</div>
+                              <div className="break-words font-medium text-gray-900 dark:text-slate-50">{task.taskName}</div>
+                              {task.updatedAt && (
+                                <>
+                                  <div className="text-gray-500 dark:text-slate-400">时间</div>
+                                  <div className="text-gray-500 dark:text-slate-400">
+                                    {format(parseDateValue(task.updatedAt) || new Date(), 'MM-dd HH:mm:ss')}
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                        {(visibleQueuedTasks.length > 2 || duplicateQueuedCount > 0) && (
+                          <div className="text-[11px] text-gray-500 dark:text-slate-400">
+                            {visibleQueuedTasks.length > 2 ? `还有 ${visibleQueuedTasks.length - 2} 个排队任务` : ''}
+                            {visibleQueuedTasks.length > 2 && duplicateQueuedCount > 0 ? '，' : ''}
+                            {duplicateQueuedCount > 0 ? `已合并 ${duplicateQueuedCount} 条重复队列记录` : ''}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
-                )}
-
-                {row.robotStatus === 'running' && row.runningTasks.length === 0 && (
-                  <div className="mt-2 rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-[11px] text-blue-700 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-200">
-                    机器人状态为运行中，但最新队列页未返回执行中任务。可能是客户端正在占用、任务刚结束，或队列接口尚未同步。
-                  </div>
-                )}
-
-                {row.queuedTasks.length > 0 && (
-                  <div className="mt-2">
-                    <div className="mb-1 text-[11px] text-gray-500 dark:text-slate-400">排队任务</div>
-                    <div className="space-y-1">
-                      {row.queuedTasks.slice(0, 3).map((task) => {
-                        const taskScope = getRealtimeTaskScope(task);
-
-                        return (
-                          <div key={task.taskUuid} className="rounded-md border border-gray-100 px-3 py-2 text-xs text-gray-700 dark:border-slate-700 dark:text-slate-300">
-                            <div className="font-medium text-gray-900 break-words dark:text-slate-50">{task.taskName}</div>
-                            {taskScope?.groupNames.length ? (
-                              <div className="mt-1 text-[11px] font-medium text-purple-700 dark:text-purple-200">
-                                机器人组：{formatNamesForLabel(taskScope.groupNames, '未返回分组')}
-                              </div>
-                            ) : null}
-                            {task.updatedAt && (
-                              <div className="mt-1 text-[11px] text-gray-500 dark:text-slate-400">
-                                最新时间 {format(parseDateValue(task.updatedAt) || new Date(), 'MM-dd HH:mm:ss')}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                      {row.queuedTasks.length > 3 && (
-                        <div className="text-[11px] text-gray-500 dark:text-slate-400">
-                          还有 {row.queuedTasks.length - 3} 个排队任务
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
         ) : (
-          <div className="px-4 py-10 text-center text-sm text-gray-500 dark:text-slate-400">
+          <div className="flex min-h-0 flex-1 items-center justify-center px-4 py-10 text-center text-sm text-gray-500 dark:text-slate-400">
             当前筛选条件下没有运行中或排队任务
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+
+  const overviewPanel = (
+    <Card className="overflow-hidden border-gray-200 shadow-sm dark:border-[#30363d] dark:bg-[#161b22]">
+      <CardHeader className="border-b p-4 dark:border-[#30363d]">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <CardTitle className="text-lg">全局总览</CardTitle>
+            <CardDescription className="mt-1">
+              按机器人组或账号看一周负载，颜色越深表示当天任务越集中。
+            </CardDescription>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 rounded-md border bg-white p-1 shadow-sm dark:border-[#30363d] dark:bg-[#0d1117]">
+              <Button variant="ghost" size="icon" onClick={() => setCurrentDate((value) => subWeeks(value, 1))} className="h-8 w-8">
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              <Button variant="ghost" onClick={() => setCurrentDate(new Date())} className="h-8 px-3 text-sm font-medium">
+                今天
+              </Button>
+              <Button variant="ghost" size="icon" onClick={() => setCurrentDate((value) => addWeeks(value, 1))} className="h-8 w-8">
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="min-w-36 text-right text-sm font-semibold text-gray-700 dark:text-[#c9d1d9]">
+              {format(overviewDays[0], 'MM-dd', { locale: zhCN })} - {format(overviewDays[6], 'MM-dd', { locale: zhCN })}
+            </div>
+          </div>
+        </div>
+      </CardHeader>
+
+      <CardContent className="p-0">
+        <div className="grid gap-3 border-b p-4 dark:border-[#30363d] md:grid-cols-4">
+          <div className="rounded-md bg-slate-50 px-3 py-2 dark:bg-slate-800">
+            <div className="text-xs text-gray-500 dark:text-slate-400">范围数量</div>
+            <div className="mt-1 text-2xl font-semibold">{overviewRows.length}</div>
+          </div>
+          <div className="rounded-md bg-blue-50 px-3 py-2 text-blue-800 dark:bg-blue-950/40 dark:text-blue-200">
+            <div className="text-xs">执行中</div>
+            <div className="mt-1 text-2xl font-semibold">{overviewRows.reduce((sum, row) => sum + row.running, 0)}</div>
+          </div>
+          <div className="rounded-md bg-amber-50 px-3 py-2 text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+            <div className="text-xs">计划/排队</div>
+            <div className="mt-1 text-2xl font-semibold">{overviewRows.reduce((sum, row) => sum + row.queued, 0)}</div>
+          </div>
+          <div className="rounded-md bg-emerald-50 px-3 py-2 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200">
+            <div className="text-xs">历史完成</div>
+            <div className="mt-1 text-2xl font-semibold">{overviewRows.reduce((sum, row) => sum + row.completed, 0)}</div>
+          </div>
+        </div>
+
+        {overviewRows.length > 0 ? (
+          <div className="max-h-[calc(100vh-260px)] min-h-[560px] overflow-auto">
+            <div className="min-w-[1020px]">
+              <div
+                className="sticky top-0 z-10 grid border-b bg-white text-xs font-medium text-gray-500 dark:border-[#30363d] dark:bg-[#161b22] dark:text-[#8b949e]"
+                style={{ gridTemplateColumns: '280px repeat(7, minmax(104px, 1fr))' }}
+              >
+                <div className="border-r px-4 py-3 dark:border-[#30363d]">范围</div>
+                {overviewDays.map((day) => (
+                  <div key={day.toISOString()} className="border-r px-3 py-3 text-center last:border-r-0 dark:border-[#30363d]">
+                    {format(day, 'M月d日 EEEE', { locale: zhCN })}
+                  </div>
+                ))}
+              </div>
+
+              {overviewRows.map((row) => (
+                <div
+                  key={row.id}
+                  className="grid border-b last:border-b-0 dark:border-[#30363d]"
+                  style={{ gridTemplateColumns: '280px repeat(7, minmax(104px, 1fr))' }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => openGanttForScope(row.name)}
+                    className="flex min-h-16 min-w-0 flex-col items-start justify-center border-r px-4 py-3 text-left hover:bg-gray-50 dark:border-[#30363d] dark:hover:bg-[#21262d]"
+                  >
+                    <div className="flex min-w-0 items-center gap-2">
+                      {row.isGroup ? <Users className="h-4 w-4 shrink-0 text-purple-600" /> : <Bot className="h-4 w-4 shrink-0 text-emerald-600" />}
+                      <span className="truncate font-medium text-gray-950 dark:text-[#f0f6fc]">{row.name}</span>
+                    </div>
+                    <div className="mt-1 text-xs text-gray-500 dark:text-[#8b949e]">
+                      共 {row.total} 条，执行 {row.running}，计划/排队 {row.queued}
+                    </div>
+                  </button>
+
+                  {row.cells.map((cell) => {
+                    const ratio = Math.min(1, cell.total / maxOverviewCellCount);
+                    const isHot = cell.running > 0 || cell.queued >= 4 || ratio > 0.55;
+                    const cellClass = cell.total === 0
+                      ? 'bg-white text-gray-300 dark:bg-[#161b22] dark:text-slate-600'
+                      : isHot
+                        ? 'bg-amber-50 text-amber-900 hover:bg-amber-100 dark:bg-amber-950/30 dark:text-amber-100 dark:hover:bg-amber-950/50'
+                        : 'bg-blue-50 text-blue-900 hover:bg-blue-100 dark:bg-blue-950/25 dark:text-blue-100 dark:hover:bg-blue-950/40';
+
+                    return (
+                      <button
+                        key={`${row.id}-${cell.date.toISOString()}`}
+                        type="button"
+                        disabled={cell.total === 0}
+                        onClick={() => openGanttForScope(row.name, cell.date)}
+                        className={cn(
+                          'min-h-16 border-r px-3 py-2 text-left text-xs transition last:border-r-0 disabled:cursor-default dark:border-[#30363d]',
+                          cellClass,
+                        )}
+                        style={cell.total > 0 ? { boxShadow: `inset 0 -3px 0 rgba(37, 99, 235, ${0.15 + ratio * 0.45})` } : undefined}
+                      >
+                        {cell.total > 0 ? (
+                          <>
+                            <div className="text-lg font-semibold">{cell.total}</div>
+                            <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-[11px]">
+                              {cell.running > 0 && <span>执行 {cell.running}</span>}
+                              {cell.queued > 0 && <span>计划 {cell.queued}</span>}
+                              {cell.completed > 0 && <span>完成 {cell.completed}</span>}
+                            </div>
+                          </>
+                        ) : (
+                          <span>0</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="flex min-h-[420px] items-center justify-center px-4 text-center text-sm text-gray-500 dark:text-[#8b949e]">
+            当前周没有可汇总的任务记录
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+
+  const ganttPanel = (
+    <Card className="flex h-[calc(100vh-180px)] min-h-[640px] w-full min-w-0 flex-col border-gray-200 shadow-sm dark:border-[#30363d] dark:bg-[#161b22]">
+      <CardHeader className="border-b pb-4 dark:border-[#30363d]">
+        <div className="space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <CalendarIcon className="h-5 w-5 shrink-0 text-gray-500 dark:text-[#8b949e]" />
+              <CardTitle className="whitespace-nowrap text-lg">计划甘特图</CardTitle>
+            </div>
+            <span className="text-right text-sm font-semibold text-gray-700 dark:text-[#c9d1d9]">
+              {currentPeriodLabel}
+            </span>
+          </div>
+
+          <div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-center">
+            <div className="flex shrink-0 items-center gap-3">
+              <div className="flex items-center gap-1 rounded-md border bg-white p-1 shadow-sm dark:border-[#30363d] dark:bg-[#0d1117]">
+                <Button variant="ghost" size="icon" onClick={handlePrevPeriod} className="h-8 w-8 dark:text-[#c9d1d9] dark:hover:bg-[#21262d]">
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+                <Button variant="ghost" onClick={() => setCurrentDate(new Date())} className="h-8 px-3 text-sm font-medium dark:text-[#f0f6fc] dark:hover:bg-[#21262d]">
+                  今天
+                </Button>
+                <Button variant="ghost" size="icon" onClick={handleNextPeriod} className="h-8 w-8 dark:text-[#c9d1d9] dark:hover:bg-[#21262d]">
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-[220px_minmax(220px,1fr)_300px] lg:flex-1">
+              <Tabs value={groupBy} onValueChange={(value) => setGroupBy(value as TimelineGroupBy)} className="w-full">
+                <TabsList className="grid w-full grid-cols-2">
+                  <TabsTrigger value="task">按任务</TabsTrigger>
+                  <TabsTrigger value="account">按账号/分组</TabsTrigger>
+                </TabsList>
+              </Tabs>
+
+              <Input
+                placeholder="搜索任务、应用或机器人..."
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+                className="w-full"
+              />
+
+              <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as ViewMode)} className="w-full">
+                <TabsList className="grid w-full grid-cols-4">
+                  <TabsTrigger value="Day">日</TabsTrigger>
+                  <TabsTrigger value="Week">周</TabsTrigger>
+                  <TabsTrigger value="Month">月</TabsTrigger>
+                  <TabsTrigger value="Year">年</TabsTrigger>
+                </TabsList>
+              </Tabs>
+            </div>
+          </div>
+        </div>
+      </CardHeader>
+
+      <CardContent className="min-h-0 flex-1 p-0">
+        {loading && tasks.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-24 text-gray-400">
+            <Loader2 className="mb-4 h-8 w-8 animate-spin text-primary" />
+            <p>正在按分页拉取任务、执行记录和运行结果，请稍候...</p>
+          </div>
+        ) : filteredTasks.length > 0 ? (
+          <div className="h-full p-3">
+            <GanttChart
+              tasks={filteredTasks}
+              viewMode={viewMode}
+              currentDate={currentDate}
+              currentTime={clockNow}
+              groupBy={groupBy}
+              robotClients={robotClients}
+              robotGroups={robotGroups}
+              searchTerm={searchTerm}
+            />
+          </div>
+        ) : (
+          <div className="p-8 text-center text-sm text-gray-500">
+            {searchTerm ? (
+              <div className="py-12">
+                <Bot className="mx-auto mb-4 h-12 w-12 text-gray-300" />
+                <p className="text-lg font-medium text-gray-900 dark:text-[#f0f6fc]">没有找到匹配结果</p>
+                <p className="mt-1">试试更换任务名、机器人名或账号名关键字。</p>
+                <Button variant="link" onClick={() => setSearchTerm('')} className="mt-2">
+                  清空搜索
+                </Button>
+              </div>
+            ) : (
+              <>
+                <p className="mb-4">当前没有生成可展示的计划任务。</p>
+                {(schedules.length > 0 || rawResponse) && (
+                  <div className="max-h-96 overflow-auto rounded-md bg-gray-100 p-4 text-left font-mono text-xs dark:bg-[#0d1117] dark:text-[#c9d1d9]">
+                    <p className="mb-2 font-bold">调试信息（首屏原始响应）</p>
+                    <pre>{JSON.stringify(rawResponse || schedules, null, 2)}</pre>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         )}
       </CardContent>
@@ -2056,29 +2451,30 @@ export default function App() {
 
   return (
     <div className={cn(themeMode === 'dark' && 'dark')}>
-      <div className="min-h-screen bg-gray-50 p-4 text-gray-900 md:p-8 dark:bg-[#0d1117] dark:text-[#c9d1d9]">
-      <div className="max-w-[1800px] mx-auto space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-[#f0f6fc]">影刀任务计划看板</h1>
-            <p className="text-gray-500 mt-1 dark:text-[#8b949e]">根据常规定时任务历史结果推算计划，并同步展示当前执行中与排队中的任务</p>
+      <div className="min-h-screen bg-gray-50 p-2 text-gray-900 md:p-3 dark:bg-[#0d1117] dark:text-[#c9d1d9]">
+      <div className="mx-auto max-w-[1920px] space-y-3">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <h1 className="text-xl font-bold tracking-tight text-gray-900 md:text-2xl dark:text-[#f0f6fc]">影刀任务计划看板</h1>
+            <p className="mt-0.5 text-xs text-gray-500 dark:text-[#8b949e]">常规定时任务、实时执行与排队状态</p>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2">
             {lastUpdatedAt && (
-              <div className="text-right text-xs text-gray-500 dark:text-[#8b949e]">
-                <div>约 {Math.round(AUTO_REFRESH_MS / 1000)} 秒同步实时任务</div>
-                <div>上次更新 {format(lastUpdatedAt, 'HH:mm:ss')}</div>
+              <div className="rounded-md border border-gray-200 bg-white px-2.5 py-1 text-right text-[11px] text-gray-500 dark:border-[#30363d] dark:bg-[#161b22] dark:text-[#8b949e]">
+                <div>{Math.round(AUTO_REFRESH_MS / 1000)} 秒同步</div>
+                <div>更新 {format(lastUpdatedAt, 'HH:mm:ss')}</div>
               </div>
             )}
             <Button
               variant="outline"
               onClick={() => setThemeMode((value) => (value === 'dark' ? 'light' : 'dark'))}
               title={themeMode === 'dark' ? '切换到白天模式' : '切换到黑夜模式'}
+              className="h-8 w-9 px-0"
             >
               {themeMode === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </Button>
-            <Button variant="outline" onClick={() => refreshDashboard(token)} disabled={loading}>
+            <Button variant="outline" onClick={() => refreshDashboard(token)} disabled={loading} className="h-8 px-3">
               <RefreshCw className={cn('w-4 h-4 mr-2', loading && 'animate-spin')} />
               刷新
             </Button>
@@ -2093,45 +2489,43 @@ export default function App() {
                 setRealtimeQueueRows([]);
                 setRawResponse(null);
               }}
+              className="h-8 px-2"
             >
               退出登录
             </Button>
           </div>
         </div>
 
-        <div className="flex gap-2 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900 dark:border-[#1f6feb66] dark:bg-[#0d419d26] dark:text-[#c9d1d9]">
-          <Info className="mt-0.5 h-4 w-4 shrink-0" />
-          <p>
-            计划甘特图展示可预测的定时/周期任务；手动触发和临时触发的任务会出现在实时任务看板，正在执行的任务也会同步到当前时间线。
-          </p>
-        </div>
+        <div className="rounded-lg border border-gray-200 bg-white p-2 shadow-sm dark:border-[#30363d] dark:bg-[#161b22]">
+          <div className="flex flex-col gap-2 xl:flex-row xl:items-center">
+            <Tabs value={dashboardPage} onValueChange={(value) => setDashboardPage(value as DashboardPage)} className="w-full xl:w-[420px] xl:shrink-0">
+              <TabsList className="grid h-9 w-full grid-cols-3 rounded-md bg-gray-100 p-0.5 dark:bg-[#0d1117]">
+                <TabsTrigger value="overview" className="h-8 text-xs">总览</TabsTrigger>
+                <TabsTrigger value="realtime" className="h-8 text-xs">实时任务</TabsTrigger>
+                <TabsTrigger value="gantt" className="h-8 text-xs">计划甘特图</TabsTrigger>
+              </TabsList>
+            </Tabs>
 
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
-          {[
-            { label: '机器人总数', value: realtimeOverviewStats.totalRobots, tone: 'slate' },
-            { label: '机器人运行中', value: realtimeOverviewStats.robotRunning, tone: 'blue' },
-            { label: '机器人空闲', value: realtimeOverviewStats.robotIdle, tone: 'emerald' },
-            { label: '机器人离线', value: realtimeOverviewStats.robotOffline, tone: 'gray' },
-            { label: '执行中任务', value: realtimeOverviewStats.runningJobs, tone: 'indigo' },
-            { label: '排队中任务', value: realtimeOverviewStats.queuedJobs, tone: 'amber' },
-            { label: '有任务账号', value: realtimeOverviewStats.activeAccounts, tone: 'violet' },
-          ].map((item) => (
-            <div
-              key={item.label}
-              className={cn(
-                'rounded-xl border px-4 py-3 shadow-sm dark:border-[#30363d]',
-                item.tone === 'blue' && 'bg-blue-50 text-blue-950 dark:bg-[#1f6feb26] dark:text-[#79c0ff]',
-                item.tone === 'emerald' && 'bg-emerald-50 text-emerald-950 dark:bg-emerald-950/30 dark:text-emerald-200',
-                item.tone === 'amber' && 'bg-amber-50 text-amber-950 dark:bg-[#9e6a0326] dark:text-[#f2cc60]',
-                item.tone === 'indigo' && 'bg-indigo-50 text-indigo-950 dark:bg-indigo-950/30 dark:text-indigo-200',
-                item.tone === 'violet' && 'bg-violet-50 text-violet-950 dark:bg-violet-950/30 dark:text-violet-200',
-                (item.tone === 'slate' || item.tone === 'gray') && 'bg-white text-gray-900 dark:bg-[#161b22] dark:text-[#f0f6fc]',
-              )}
-            >
-              <div className="text-xs opacity-70">{item.label}</div>
-              <div className="mt-1 text-2xl font-semibold">{item.value}</div>
+            <div className="grid flex-1 grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-7">
+              {[
+                { label: '机器人', value: realtimeOverviewStats.totalRobots, className: 'bg-white dark:bg-[#161b22]' },
+                { label: '运行', value: realtimeOverviewStats.robotRunning, className: 'bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-200' },
+                { label: '空闲', value: realtimeOverviewStats.robotIdle, className: 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200' },
+                { label: '离线', value: realtimeOverviewStats.robotOffline, className: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200' },
+                { label: '执行任务', value: realtimeOverviewStats.runningJobs, className: 'bg-indigo-50 text-indigo-800 dark:bg-indigo-950/35 dark:text-indigo-200' },
+                { label: '排队任务', value: realtimeOverviewStats.queuedJobs, className: 'bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-200' },
+                { label: '有任务账号', value: `${realtimeOverviewStats.activeAccounts}/${realtimeQueueStats.accounts}`, className: 'bg-violet-50 text-violet-800 dark:bg-violet-950/35 dark:text-violet-200' },
+              ].map((item) => (
+                <div
+                  key={item.label}
+                  className={cn('min-h-12 rounded-md border border-gray-100 px-3 py-2 dark:border-[#30363d]', item.className)}
+                >
+                  <div className="text-[11px] opacity-70">{item.label}</div>
+                  <div className="mt-0.5 text-lg font-semibold leading-none">{item.value}</div>
+                </div>
+              ))}
             </div>
-          ))}
+          </div>
         </div>
 
         {error && (
@@ -2174,112 +2568,10 @@ export default function App() {
           </Card>
         )}
 
-        {false && null}
-        {false && null}
-        <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_440px]">
-          <Card className="flex h-full w-full min-w-0 flex-1 flex-col shadow-sm border-gray-200 dark:border-[#30363d] dark:bg-[#161b22]">
-            <CardHeader className="pb-4 border-b dark:border-[#30363d]">
-              <div className="space-y-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <CalendarIcon className="w-5 h-5 text-gray-500 shrink-0 dark:text-[#8b949e]" />
-                    <CardTitle className="text-lg whitespace-nowrap">计划甘特图</CardTitle>
-                  </div>
-                  <span className="text-sm font-semibold text-gray-700 text-right dark:text-[#c9d1d9]">
-                    {currentPeriodLabel}
-                  </span>
-                </div>
-
-                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-                  <div className="flex items-center gap-3 shrink-0">
-                    <div className="flex items-center gap-1 bg-white border rounded-md p-1 shadow-sm dark:border-[#30363d] dark:bg-[#0d1117]">
-                      <Button variant="ghost" size="icon" onClick={handlePrevPeriod} className="h-8 w-8 dark:text-[#c9d1d9] dark:hover:bg-[#21262d]">
-                        <ChevronLeft className="h-4 w-4" />
-                      </Button>
-                      <Button variant="ghost" onClick={() => setCurrentDate(new Date())} className="h-8 px-3 text-sm font-medium dark:text-[#f0f6fc] dark:hover:bg-[#21262d]">
-                        今天
-                      </Button>
-                      <Button variant="ghost" size="icon" onClick={handleNextPeriod} className="h-8 w-8 dark:text-[#c9d1d9] dark:hover:bg-[#21262d]">
-                        <ChevronRight className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-[220px_minmax(220px,1fr)_300px] gap-3 lg:flex-1">
-                    <Tabs value={groupBy} onValueChange={(value) => setGroupBy(value as TimelineGroupBy)} className="w-full">
-                      <TabsList className="grid w-full grid-cols-2">
-                        <TabsTrigger value="task">按任务</TabsTrigger>
-                        <TabsTrigger value="account">按账号/分组</TabsTrigger>
-                      </TabsList>
-                    </Tabs>
-
-                    <Input
-                      placeholder="搜索任务、应用或机器人..."
-                      value={searchTerm}
-                      onChange={(event) => setSearchTerm(event.target.value)}
-                      className="w-full"
-                    />
-
-                    <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as ViewMode)} className="w-full">
-                      <TabsList className="grid w-full grid-cols-4">
-                        <TabsTrigger value="Day">日</TabsTrigger>
-                        <TabsTrigger value="Week">周</TabsTrigger>
-                        <TabsTrigger value="Month">月</TabsTrigger>
-                        <TabsTrigger value="Year">年</TabsTrigger>
-                      </TabsList>
-                    </Tabs>
-                  </div>
-                </div>
-              </div>
-            </CardHeader>
-
-            <CardContent className="min-h-0 flex-1 p-0">
-              {loading && tasks.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-24 text-gray-400">
-                  <Loader2 className="w-8 h-8 animate-spin mb-4 text-primary" />
-                  <p>正在按分页拉取任务、执行记录和运行结果，请稍候...</p>
-                </div>
-              ) : filteredTasks.length > 0 ? (
-                <div className="p-4">
-                  <GanttChart
-                    tasks={filteredTasks}
-                    viewMode={viewMode}
-                    currentDate={currentDate}
-                    currentTime={clockNow}
-                    groupBy={groupBy}
-                    robotClients={robotClients}
-                    robotGroups={robotGroups}
-                    searchTerm={searchTerm}
-                  />
-                </div>
-              ) : (
-                <div className="p-8 text-center text-gray-500 text-sm">
-                  {searchTerm ? (
-                    <div className="py-12">
-                      <Bot className="w-12 h-12 mx-auto text-gray-300 mb-4" />
-                      <p className="text-lg font-medium text-gray-900">没有找到匹配结果</p>
-                      <p className="mt-1">试试更换任务名、机器人名或账号名关键字。</p>
-                      <Button variant="link" onClick={() => setSearchTerm('')} className="mt-2">
-                        清空搜索
-                      </Button>
-                    </div>
-                  ) : (
-                    <>
-                      <p className="mb-4">当前没有生成可展示的计划任务。</p>
-                    {(schedules.length > 0 || rawResponse) && (
-                        <div className="text-left bg-gray-100 p-4 rounded-md overflow-auto max-h-96 text-xs font-mono dark:bg-[#0d1117] dark:text-[#c9d1d9]">
-                          <p className="font-bold mb-2">调试信息（首屏原始响应）</p>
-                          <pre>{JSON.stringify(rawResponse || schedules, null, 2)}</pre>
-                        </div>
-                      )}
-                    </>
-                  )}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {realtimeQueuePanel}
+        <div className="min-h-0">
+          {dashboardPage === 'overview' && overviewPanel}
+          {dashboardPage === 'realtime' && realtimeQueuePanel}
+          {dashboardPage === 'gantt' && ganttPanel}
         </div>
       </div>
     </div>

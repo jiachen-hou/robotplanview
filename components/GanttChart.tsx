@@ -303,7 +303,10 @@ export function GanttChart({
 
     tasks.forEach((task) => {
       const groupNames = uniqueValues(task.groupNames || []);
-      const accountNames = uniqueValues([...(task.clientNames || []), task.clientName]);
+      const actualAccountNames = uniqueValues(task.actualClientNames || []);
+      const accountNames = task.isHistorical && actualAccountNames.length > 0
+        ? actualAccountNames
+        : uniqueValues([...(task.clientNames || []), task.clientName]);
       const targetRows = [
         ...groupNames.map((name) => ({ name, isGroup: true })),
         ...((task.isRealtime || groupNames.length === 0)
@@ -454,11 +457,11 @@ export function GanttChart({
     : [];
 
   return (
-    <div className="flex h-full min-h-[920px] w-full flex-col overflow-hidden rounded-md border bg-white shadow-sm dark:border-[#30363d] dark:bg-[#161b22]">
+    <div className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-md border bg-white shadow-sm dark:border-[#30363d] dark:bg-[#161b22]">
       <div ref={scrollContainerRef} className="flex-1 overflow-auto shadow-inner">
         <div className="relative min-w-max">
           <div className="sticky top-0 z-30 flex border-b bg-gray-50 shadow-sm dark:border-[#30363d] dark:bg-[#21262d]">
-            <div className="sticky left-0 z-40 flex w-64 shrink-0 items-center border-r bg-gray-50 p-2 text-sm font-semibold dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#f0f6fc]">
+            <div className="sticky left-0 z-40 flex w-72 shrink-0 items-center border-r bg-gray-50 p-2 text-sm font-semibold dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#f0f6fc]">
               任务信息
             </div>
             <div className="relative flex flex-1" style={{ minWidth: `${gridMinWidth}px` }}>
@@ -493,7 +496,7 @@ export function GanttChart({
             ) : (
               paginatedGroups.map((group) => (
                 <div key={group.id} className="group/row flex border-b hover:bg-gray-50 dark:border-[#30363d] dark:hover:bg-[#21262d]">
-                  <div className="sticky left-0 z-20 flex w-64 shrink-0 flex-col justify-center gap-0.5 border-r bg-white p-1 px-2 group-hover/row:bg-gray-50 dark:border-[#30363d] dark:bg-[#161b22] dark:group-hover/row:bg-[#21262d]">
+                  <div className="sticky left-0 z-20 flex w-72 shrink-0 flex-col justify-center gap-1 border-r bg-white p-2 px-3 group-hover/row:bg-gray-50 dark:border-[#30363d] dark:bg-[#161b22] dark:group-hover/row:bg-[#21262d]">
                     {groupBy === 'task' ? (
                       <>
                         <div className="truncate text-xs font-medium text-gray-800 dark:text-[#f0f6fc]" title={group.name}>
@@ -538,7 +541,7 @@ export function GanttChart({
 
                   <div
                     className="relative flex-1"
-                    style={{ minHeight: `${Math.max(34, group.totalLanes * 18 + 6)}px`, minWidth: `${gridMinWidth}px` }}
+                    style={{ minHeight: `${Math.max(42, group.totalLanes * 18 + 10)}px`, minWidth: `${gridMinWidth}px` }}
                   >
                     <div className="pointer-events-none absolute inset-0 flex">
                       {columns.map((_, index) => (

@@ -2159,7 +2159,7 @@ export default function App() {
           <div>
             <CardTitle className="text-lg">全局总览</CardTitle>
             <CardDescription className="mt-1">
-              按机器人组或账号看一周负载，颜色越深表示当天任务越集中。
+              按机器人组或账号看一周负载，蓝/黄/橙/红表示从低到高的任务密度。
             </CardDescription>
           </div>
           <div className="flex items-center gap-2">
@@ -2238,12 +2238,31 @@ export default function App() {
 
                   {row.cells.map((cell) => {
                     const ratio = Math.min(1, cell.total / maxOverviewCellCount);
-                    const isHot = cell.running > 0 || cell.queued >= 4 || ratio > 0.55;
-                    const cellClass = cell.total === 0
+                    const loadLevel = cell.total >= 12 || ratio >= 0.8
+                      ? 'critical'
+                      : cell.total >= 8 || ratio >= 0.55
+                        ? 'high'
+                        : cell.total >= 4 || ratio >= 0.3
+                          ? 'medium'
+                          : cell.total > 0
+                            ? 'low'
+                            : 'empty';
+                    const cellClass = loadLevel === 'empty'
                       ? 'bg-white text-gray-300 dark:bg-[#161b22] dark:text-slate-600'
-                      : isHot
-                        ? 'bg-amber-50 text-amber-900 hover:bg-amber-100 dark:bg-amber-950/30 dark:text-amber-100 dark:hover:bg-amber-950/50'
-                        : 'bg-blue-50 text-blue-900 hover:bg-blue-100 dark:bg-blue-950/25 dark:text-blue-100 dark:hover:bg-blue-950/40';
+                      : loadLevel === 'critical'
+                        ? 'border-l-4 border-l-red-600 bg-red-200 text-red-950 hover:bg-red-300 dark:border-l-red-400 dark:bg-red-950/70 dark:text-red-50 dark:hover:bg-red-950'
+                        : loadLevel === 'high'
+                          ? 'border-l-4 border-l-orange-500 bg-orange-200 text-orange-950 hover:bg-orange-300 dark:border-l-orange-300 dark:bg-orange-950/65 dark:text-orange-50 dark:hover:bg-orange-950'
+                          : loadLevel === 'medium'
+                            ? 'border-l-4 border-l-amber-400 bg-amber-100 text-amber-950 hover:bg-amber-200 dark:border-l-amber-300 dark:bg-amber-950/55 dark:text-amber-50 dark:hover:bg-amber-950/75'
+                            : 'border-l-4 border-l-sky-400 bg-sky-50 text-sky-950 hover:bg-sky-100 dark:border-l-sky-300 dark:bg-sky-950/45 dark:text-sky-50 dark:hover:bg-sky-950/65';
+                    const meterClass = loadLevel === 'critical'
+                      ? 'bg-red-700 dark:bg-red-300'
+                      : loadLevel === 'high'
+                        ? 'bg-orange-600 dark:bg-orange-300'
+                        : loadLevel === 'medium'
+                          ? 'bg-amber-500 dark:bg-amber-300'
+                          : 'bg-sky-500 dark:bg-sky-300';
 
                     return (
                       <button
@@ -2252,18 +2271,25 @@ export default function App() {
                         disabled={cell.total === 0}
                         onClick={() => openGanttForScope(row.name, cell.date)}
                         className={cn(
-                          'min-h-16 border-r px-3 py-2 text-left text-xs transition last:border-r-0 disabled:cursor-default dark:border-[#30363d]',
+                          'relative min-h-16 overflow-hidden border-r px-3 py-2 pb-4 text-left text-xs transition last:border-r-0 disabled:cursor-default dark:border-[#30363d]',
                           cellClass,
                         )}
-                        style={cell.total > 0 ? { boxShadow: `inset 0 -3px 0 rgba(37, 99, 235, ${0.15 + ratio * 0.45})` } : undefined}
                       >
                         {cell.total > 0 ? (
                           <>
-                            <div className="text-lg font-semibold">{cell.total}</div>
-                            <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-[11px]">
+                            <div className={cn('text-xl font-bold leading-none', loadLevel === 'critical' && 'text-2xl')}>
+                              {cell.total}
+                            </div>
+                            <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-[11px] font-medium">
                               {cell.running > 0 && <span>执行 {cell.running}</span>}
                               {cell.queued > 0 && <span>计划 {cell.queued}</span>}
                               {cell.completed > 0 && <span>完成 {cell.completed}</span>}
+                            </div>
+                            <div className="absolute bottom-1.5 left-3 right-3 h-1 rounded-full bg-white/60 dark:bg-black/25">
+                              <div
+                                className={cn('h-full rounded-full', meterClass)}
+                                style={{ width: `${Math.max(18, Math.round(ratio * 100))}%` }}
+                              />
                             </div>
                           </>
                         ) : (

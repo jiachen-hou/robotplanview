@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   addDays,
   differenceInMinutes,
@@ -132,16 +132,27 @@ function formatDuration(startDate: Date, endDate: Date): string {
   return `${Math.max(1, Math.round(diffMs / 1000))} 秒`;
 }
 
-function getTooltipPosition(x: number, y: number) {
-  const width = 340;
-  const height = 300;
-  const padding = 16;
+function getTooltipPosition(x: number, y: number, width = 340, height = 300): React.CSSProperties {
+  const padding = 12;
+  const gap = 14;
   const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1600;
   const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 900;
+  const safeWidth = Math.min(width, viewportWidth - padding * 2);
+  const safeHeight = Math.min(height, viewportHeight - padding * 2);
+  let left = x + gap;
+  let top = y + gap;
+
+  if (left + safeWidth + padding > viewportWidth) {
+    left = x - safeWidth - gap;
+  }
+
+  if (top + safeHeight + padding > viewportHeight) {
+    top = y - safeHeight - gap;
+  }
 
   return {
-    left: Math.min(Math.max(padding, x + 14), viewportWidth - width - padding),
-    top: Math.min(Math.max(padding, y + 14), viewportHeight - height - padding),
+    left: Math.min(Math.max(padding, left), viewportWidth - safeWidth - padding),
+    top: Math.min(Math.max(padding, top), viewportHeight - safeHeight - padding),
   };
 }
 
@@ -158,7 +169,9 @@ export function GanttChart({
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
+  const [tooltipPosition, setTooltipPosition] = useState<React.CSSProperties>({ left: 12, top: 12 });
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const tooltipRef = useRef<HTMLDivElement | null>(null);
   const autoScrollKeyRef = useRef('');
   const now = currentTime || new Date();
 
@@ -536,6 +549,7 @@ export function GanttChart({
     key: string = task.id,
   ) => {
     event.stopPropagation();
+    setTooltipPosition(getTooltipPosition(event.clientX, event.clientY));
     setTooltip({
       key,
       task,
@@ -603,6 +617,24 @@ export function GanttChart({
             : []),
       ]
     : [];
+
+  useLayoutEffect(() => {
+    if (!tooltip) return undefined;
+
+    const updateTooltipPosition = () => {
+      const rect = tooltipRef.current?.getBoundingClientRect();
+      setTooltipPosition(getTooltipPosition(
+        tooltip.x,
+        tooltip.y,
+        rect?.width || 340,
+        rect?.height || 300,
+      ));
+    };
+
+    updateTooltipPosition();
+    window.addEventListener('resize', updateTooltipPosition);
+    return () => window.removeEventListener('resize', updateTooltipPosition);
+  }, [tooltip?.key, tooltip?.x, tooltip?.y, tooltip?.tasks.length, tooltipRows.length]);
 
   return (
     <div className="w-full overflow-visible rounded-md border bg-white shadow-sm dark:border-[#30363d] dark:bg-[#161b22]">
@@ -810,14 +842,15 @@ export function GanttChart({
 
       {tooltip && (
         <div
+          ref={tooltipRef}
           className={cn(
-            'fixed z-[120] w-[340px] rounded-xl border border-gray-200 bg-white/95 shadow-2xl backdrop-blur dark:border-[#30363d] dark:bg-[#161b22]/95',
+            'fixed z-[120] flex max-h-[calc(100vh-24px)] w-[340px] flex-col rounded-xl border border-gray-200 bg-white/95 shadow-2xl backdrop-blur dark:border-[#30363d] dark:bg-[#161b22]/95',
             !tooltip.pinned && 'pointer-events-none',
           )}
-          style={getTooltipPosition(tooltip.x, tooltip.y)}
+          style={tooltipPosition}
           onClick={(event) => event.stopPropagation()}
         >
-          <div className="flex items-start justify-between gap-3 border-b border-gray-100 px-4 py-3 dark:border-[#30363d]">
+          <div className="flex shrink-0 items-start justify-between gap-3 border-b border-gray-100 px-4 py-3 dark:border-[#30363d]">
             <div>
               <div className="break-words text-sm font-semibold text-gray-900 dark:text-[#f0f6fc]">
                 {isClusterTooltip ? `${tooltipTasks.length} 条聚合任务` : tooltip.task.name}
@@ -834,7 +867,7 @@ export function GanttChart({
             </button>
           </div>
 
-          <div className="space-y-2 px-4 py-3 text-xs text-gray-700 dark:text-[#c9d1d9]">
+          <div className="min-h-0 space-y-2 overflow-y-auto px-4 py-3 text-xs text-gray-700 dark:text-[#c9d1d9]">
             {tooltipRows.map(([label, value]) => (
               <div key={label} className="flex justify-between gap-3">
                 <span className="text-gray-500 dark:text-[#8b949e]">{label}</span>
@@ -868,7 +901,7 @@ export function GanttChart({
             )}
           </div>
 
-          <div className="border-t border-gray-100 px-4 py-2 text-[11px] text-gray-500 dark:border-[#30363d] dark:text-[#8b949e]">
+          <div className="shrink-0 border-t border-gray-100 px-4 py-2 text-[11px] text-gray-500 dark:border-[#30363d] dark:text-[#8b949e]">
             {tooltip.pinned ? '已固定详情，点击当前颗粒或右上角关闭。' : '悬浮查看详情，点击颗粒可固定打开。'}
           </div>
         </div>

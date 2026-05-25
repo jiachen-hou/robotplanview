@@ -70,6 +70,10 @@ function normalizeGroupKey(value: string): string {
   return value.trim().toLowerCase();
 }
 
+function getRowGroupKey(name: string, isGroup: boolean): string {
+  return `${isGroup ? 'group' : 'account'}_${normalizeGroupKey(name)}`;
+}
+
 function uniqueValues(values: Array<string | undefined | null>): string[] {
   return [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])];
 }
@@ -292,8 +296,9 @@ export function GanttChart({
     robotClients.forEach((client) => {
       const key = client.robotClientName || client.windowsUserName;
       if (!key) return;
-      createGroup(groups, key, {
-        id: `account_${key}`,
+      const rowKey = getRowGroupKey(key, false);
+      createGroup(groups, rowKey, {
+        id: rowKey,
         name: key,
         robotName: '-',
         clientName: key,
@@ -315,8 +320,9 @@ export function GanttChart({
       ];
 
       targetRows.forEach(({ name, isGroup }) => {
-        const group = createGroup(groups, `${isGroup ? 'group' : 'account'}_${name}`, {
-          id: `${isGroup ? 'group' : 'account'}_${name}`,
+        const rowKey = getRowGroupKey(name, isGroup);
+        const group = createGroup(groups, rowKey, {
+          id: rowKey,
           name,
           robotName: '-',
           clientName: name,
@@ -411,6 +417,109 @@ export function GanttChart({
     }
 
     return `hsl(${Math.abs(hash) % 360} 58% 52%)`;
+  };
+
+  const getTaskPosition = (task: ExtendedScheduleTask & { lane: number }) => {
+    const visibleStart = task.startDate < startDate ? startDate : task.startDate;
+    const visibleEnd = task.endDate > endDate ? endDate : task.endDate;
+    const totalMs = Math.max(1, totalMinutes * 60 * 1000);
+    const rawLeftPx = Math.max(0, ((visibleStart.getTime() - startDate.getTime()) / totalMs) * gridMinWidth);
+    const rightPx = Math.min(gridMinWidth, ((visibleEnd.getTime() - startDate.getTime()) / totalMs) * gridMinWidth);
+    const rawWidthPx = Math.max(0, ((visibleEnd.getTime() - visibleStart.getTime()) / totalMs) * gridMinWidth);
+    const realtimeMinWidth = task.isRealtime ? 8 : minVisibleTaskWidth;
+    const widthPx = Math.min(
+      Math.max(realtimeMinWidth, rawWidthPx),
+      Math.max(realtimeMinWidth, gridMinWidth - rawLeftPx),
+    );
+    const leftPx = task.isRealtime ? Math.max(0, rightPx - widthPx) : rawLeftPx;
+
+    return {
+      leftPx,
+      rawWidthPx,
+      topPx: 4 + task.lane * 18,
+      widthPx,
+    };
+  };
+
+  const getClusterColor = (clusterTasks: Array<ExtendedScheduleTask & { lane: number }>) => {
+    if (clusterTasks.some((task) => task.isRealtime)) return '#1f6feb';
+    if (clusterTasks.some((task) => task.status === 'failed')) return '#f85149';
+    if (clusterTasks.some((task) => task.status === 'running')) return '#58a6ff';
+    if (clusterTasks.every((task) => task.status === 'completed')) return '#3fb950';
+    return getTaskColor(clusterTasks[0]);
+  };
+
+  const buildGanttItems = (executions: Array<ExtendedScheduleTask & { lane: number }>) => {
+    const positioned = executions
+      .map((task) => ({
+        task,
+        ...getTaskPosition(task),
+      }))
+      .sort((left, right) => {
+        if (left.task.lane !== right.task.lane) return left.task.lane - right.task.lane;
+        return left.leftPx - right.leftPx;
+      });
+
+    if (viewMode === 'Day') {
+      return positioned.map((item) => ({
+        id: item.task.id,
+        task: item.task,
+        tasks: [item.task],
+        isCluster: false,
+        leftPx: item.leftPx,
+        rawWidthPx: item.rawWidthPx,
+        title: item.task.name,
+        topPx: item.topPx,
+        widthPx: item.widthPx,
+        color: getTaskColor(item.task),
+      }));
+    }
+
+    const clusterGapPx = viewMode === 'Week' ? 18 : viewMode === 'Month' ? 14 : 10;
+    const clusters: Array<typeof positioned> = [];
+
+    positioned.forEach((item) => {
+      const lastCluster = clusters[clusters.length - 1];
+      if (!lastCluster) {
+        clusters.push([item]);
+        return;
+      }
+
+      const lastItem = lastCluster[lastCluster.length - 1];
+      const lastRightPx = Math.max(...lastCluster.map((clusterItem) => clusterItem.leftPx + clusterItem.widthPx));
+      if (lastItem.task.lane === item.task.lane && item.leftPx <= lastRightPx + clusterGapPx) {
+        lastCluster.push(item);
+        return;
+      }
+
+      clusters.push([item]);
+    });
+
+    return clusters.map((clusterItems) => {
+      const clusterTasks = clusterItems.map((item) => item.task);
+      const firstItem = clusterItems[0];
+      const leftPx = Math.min(...clusterItems.map((item) => item.leftPx));
+      const rightPx = Math.max(...clusterItems.map((item) => item.leftPx + item.widthPx));
+      const widthPx = clusterItems.length > 1 ? Math.max(24, rightPx - leftPx) : firstItem.widthPx;
+      const title = clusterItems.length > 1
+        ? `${clusterItems.length} 条任务\n${clusterTasks.slice(0, 5).map((task) => `${format(task.startDate, 'MM-dd HH:mm')} ${task.name}`).join('\n')}`
+        : firstItem.task.name;
+
+      return {
+        id: clusterItems.length > 1
+          ? `cluster-${firstItem.task.lane}-${clusterItems.map((item) => item.task.id).join('-')}`
+          : firstItem.task.id,
+        task: firstItem.task,
+        tasks: clusterTasks,
+        isCluster: clusterItems.length > 1,
+        leftPx,
+        rawWidthPx: rightPx - leftPx,
+        title,
+        topPx: firstItem.topPx,
+        widthPx,
+        color: clusterItems.length > 1 ? getClusterColor(clusterTasks) : getTaskColor(firstItem.task),
+      };
+    });
   };
 
   const openTooltip = (
@@ -560,35 +669,26 @@ export function GanttChart({
                       />
                     )}
 
-                    {group.executions.map((task) => {
-                      const visibleStart = task.startDate < startDate ? startDate : task.startDate;
-                      const visibleEnd = task.endDate > endDate ? endDate : task.endDate;
-                      const totalMs = Math.max(1, totalMinutes * 60 * 1000);
-                      const rawLeftPx = Math.max(0, ((visibleStart.getTime() - startDate.getTime()) / totalMs) * gridMinWidth);
-                      const rightPx = Math.min(gridMinWidth, ((visibleEnd.getTime() - startDate.getTime()) / totalMs) * gridMinWidth);
-                      const rawWidthPx = Math.max(0, ((visibleEnd.getTime() - visibleStart.getTime()) / totalMs) * gridMinWidth);
-                      const realtimeMinWidth = task.isRealtime ? 8 : minVisibleTaskWidth;
-                      const widthPx = Math.min(
-                        Math.max(realtimeMinWidth, rawWidthPx),
-                        Math.max(realtimeMinWidth, gridMinWidth - rawLeftPx),
-                      );
-                      const leftPx = task.isRealtime ? Math.max(0, rightPx - widthPx) : rawLeftPx;
+                    {buildGanttItems(group.executions).map((item) => {
+                      const task = item.task;
                       const labelMinWidth = viewMode === 'Day' ? 28 : 40;
 
                       return (
                         <div
-                          key={task.id}
+                          key={item.id}
+                          title={item.title}
                           className={cn(
                             'absolute flex h-4 cursor-pointer items-center truncate rounded-sm px-1 text-[9px] text-white shadow-sm transition-all hover:z-30 hover:ring-2 hover:ring-blue-400 hover:ring-offset-1 dark:hover:ring-offset-[#0d1117]',
                             task.isRealtime && 'h-5 rounded-md shadow-md ring-2 ring-blue-300/70 animate-pulse dark:ring-[#58a6ff]/80',
                             task.status === 'running' && 'animate-pulse ring-1 ring-blue-400',
                             task.status === 'pending' ? 'border border-dashed border-white/30 opacity-70' : 'opacity-100',
+                            item.isCluster && 'h-5 justify-center rounded-full px-2 text-[10px] font-semibold opacity-100 ring-2 ring-white/80 dark:ring-[#0d1117]',
                           )}
                           style={{
-                            left: `${leftPx}px`,
-                            width: `${widthPx}px`,
-                            top: `${4 + task.lane * 18}px`,
-                            backgroundColor: getTaskColor(task),
+                            left: `${item.leftPx}px`,
+                            width: `${item.widthPx}px`,
+                            top: `${item.topPx}px`,
+                            backgroundColor: item.color,
                           }}
                           onMouseEnter={(event) => openTooltip(task, event, false)}
                           onMouseMove={(event) => {
@@ -610,7 +710,9 @@ export function GanttChart({
                             openTooltip(task, event, true);
                           }}
                         >
-                          {rawWidthPx >= labelMinWidth && format(task.startDate, viewMode === 'Day' ? 'HH:mm' : 'MM-dd HH:mm')}
+                          {item.isCluster
+                            ? item.tasks.length
+                            : item.rawWidthPx >= labelMinWidth && format(task.startDate, viewMode === 'Day' ? 'HH:mm' : 'MM-dd HH:mm')}
                         </div>
                       );
                     })}

@@ -41,7 +41,9 @@ type TaskGroup = {
 };
 
 type TooltipState = {
+  key: string;
   task: ExtendedScheduleTask;
+  tasks: ExtendedScheduleTask[];
   x: number;
   y: number;
   pinned: boolean;
@@ -167,8 +169,12 @@ export function GanttChart({
   useEffect(() => {
     setTooltip((current) => {
       if (!current) return current;
-      const freshTask = tasks.find((task) => task.id === current.task.id);
-      if (freshTask) return { ...current, task: freshTask };
+      const freshTasks = current.tasks
+        .map((currentTask) => tasks.find((task) => task.id === currentTask.id))
+        .filter((task): task is ExtendedScheduleTask => Boolean(task));
+      if (freshTasks.length > 0) {
+        return { ...current, task: freshTasks[0], tasks: freshTasks };
+      }
       return current.pinned ? current : null;
     });
   }, [tasks]);
@@ -526,43 +532,76 @@ export function GanttChart({
     task: ExtendedScheduleTask,
     event: React.MouseEvent<HTMLDivElement>,
     pinned: boolean,
+    tooltipTasks: ExtendedScheduleTask[] = [task],
+    key: string = task.id,
   ) => {
     event.stopPropagation();
     setTooltip({
+      key,
       task,
+      tasks: tooltipTasks,
       x: event.clientX,
       y: event.clientY,
       pinned,
     });
   };
 
+  const tooltipTasks = tooltip?.tasks || [];
+  const isClusterTooltip = tooltipTasks.length > 1;
+  const clusterStart = isClusterTooltip
+    ? new Date(Math.min(...tooltipTasks.map((task) => task.startDate.getTime())))
+    : null;
+  const clusterEnd = isClusterTooltip
+    ? new Date(Math.max(...tooltipTasks.map((task) => task.endDate.getTime())))
+    : null;
+  const clusterAccounts = isClusterTooltip
+    ? uniqueValues(tooltipTasks.flatMap((task) => [...(task.clientNames || []), task.clientName]))
+    : [];
+  const clusterStatusCounts = isClusterTooltip
+    ? tooltipTasks.reduce<Record<string, number>>((summary, task) => {
+      const status = getStatusLabel(task.status);
+      return {
+        ...summary,
+        [status]: (summary[status] || 0) + 1,
+      };
+    }, {})
+    : {};
+
   const tooltipRows = tooltip
-    ? [
-      ['状态', getStatusLabel(tooltip.task.status)],
-      ['类型', getTaskTypeLabel(tooltip.task)],
-      ['应用', tooltip.task.robotName || '未知应用'],
-      ['执行范围', tooltip.task.executionScopeLabel || tooltip.task.clientName || '未指定执行范围'],
-      ...(tooltip.task.groupNames?.length
-        ? [['机器人组', formatCompactNames(tooltip.task.groupNames, '未返回分组')]]
-        : []),
-      ...(tooltip.task.clientNames?.length
-        ? [['账号', formatCompactNames(tooltip.task.clientNames, '未返回账号')]]
-        : []),
-      [tooltip.task.status === 'pending' ? '预计开始时间' : '开始时间', format(tooltip.task.startDate, 'yyyy-MM-dd HH:mm:ss')],
-      [
-        tooltip.task.isRealtime ? '截至当前' : tooltip.task.status === 'pending' ? '预计结束时间' : '结束时间',
-        format(tooltip.task.endDate, 'yyyy-MM-dd HH:mm:ss'),
-      ],
-      [
-        tooltip.task.isRealtime ? '已运行时长' : tooltip.task.status === 'pending' ? '预计运行时长' : '运行时长',
-        formatDuration(tooltip.task.startDate, tooltip.task.endDate),
-      ],
-      ...(tooltip.task.isRealtime && tooltip.task.estimatedEndDate
-        ? [['预计结束时间', format(tooltip.task.estimatedEndDate, 'yyyy-MM-dd HH:mm:ss')]]
-        : tooltip.task.isRealtime
-          ? [['预计结束时间', '暂无历史均值']]
-        : []),
-    ]
+    ? isClusterTooltip
+      ? [
+        ['任务数量', `${tooltipTasks.length} 条`],
+        ['状态分布', Object.entries(clusterStatusCounts).map(([status, count]) => `${status} ${count}`).join('，')],
+        ['账号', formatCompactNames(clusterAccounts, '未返回账号')],
+        ['开始范围', clusterStart ? format(clusterStart, 'yyyy-MM-dd HH:mm:ss') : '-'],
+        ['结束范围', clusterEnd ? format(clusterEnd, 'yyyy-MM-dd HH:mm:ss') : '-'],
+      ]
+      : [
+        ['状态', getStatusLabel(tooltip.task.status)],
+        ['类型', getTaskTypeLabel(tooltip.task)],
+        ['应用', tooltip.task.robotName || '未知应用'],
+        ['执行范围', tooltip.task.executionScopeLabel || tooltip.task.clientName || '未指定执行范围'],
+        ...(tooltip.task.groupNames?.length
+          ? [['机器人组', formatCompactNames(tooltip.task.groupNames, '未返回分组')]]
+          : []),
+        ...(tooltip.task.clientNames?.length
+          ? [['账号', formatCompactNames(tooltip.task.clientNames, '未返回账号')]]
+          : []),
+        [tooltip.task.status === 'pending' ? '预计开始时间' : '开始时间', format(tooltip.task.startDate, 'yyyy-MM-dd HH:mm:ss')],
+        [
+          tooltip.task.isRealtime ? '截至当前' : tooltip.task.status === 'pending' ? '预计结束时间' : '结束时间',
+          format(tooltip.task.endDate, 'yyyy-MM-dd HH:mm:ss'),
+        ],
+        [
+          tooltip.task.isRealtime ? '已运行时长' : tooltip.task.status === 'pending' ? '预计运行时长' : '运行时长',
+          formatDuration(tooltip.task.startDate, tooltip.task.endDate),
+        ],
+        ...(tooltip.task.isRealtime && tooltip.task.estimatedEndDate
+          ? [['预计结束时间', format(tooltip.task.estimatedEndDate, 'yyyy-MM-dd HH:mm:ss')]]
+          : tooltip.task.isRealtime
+            ? [['预计结束时间', '暂无历史均值']]
+            : []),
+      ]
     : [];
 
   return (
@@ -690,10 +729,10 @@ export function GanttChart({
                             top: `${item.topPx}px`,
                             backgroundColor: item.color,
                           }}
-                          onMouseEnter={(event) => openTooltip(task, event, false)}
+                          onMouseEnter={(event) => openTooltip(task, event, false, item.tasks, item.id)}
                           onMouseMove={(event) => {
                             setTooltip((current) => (
-                              current && !current.pinned && current.task.id === task.id
+                              current && !current.pinned && current.key === item.id
                                 ? { ...current, x: event.clientX, y: event.clientY }
                                 : current
                             ));
@@ -702,12 +741,12 @@ export function GanttChart({
                             setTooltip((current) => (current?.pinned ? current : null));
                           }}
                           onClick={(event) => {
-                            if (tooltip?.pinned && tooltip.task.id === task.id) {
+                            if (tooltip?.pinned && tooltip.key === item.id) {
                               event.stopPropagation();
                               setTooltip(null);
                               return;
                             }
-                            openTooltip(task, event, true);
+                            openTooltip(task, event, true, item.tasks, item.id);
                           }}
                         >
                           {item.isCluster
@@ -780,9 +819,11 @@ export function GanttChart({
         >
           <div className="flex items-start justify-between gap-3 border-b border-gray-100 px-4 py-3 dark:border-[#30363d]">
             <div>
-              <div className="break-words text-sm font-semibold text-gray-900 dark:text-[#f0f6fc]">{tooltip.task.name}</div>
+              <div className="break-words text-sm font-semibold text-gray-900 dark:text-[#f0f6fc]">
+                {isClusterTooltip ? `${tooltipTasks.length} 条聚合任务` : tooltip.task.name}
+              </div>
               <div className="mt-1 text-xs text-gray-500 dark:text-[#8b949e]">
-                {getTaskTypeLabel(tooltip.task)} · {getStatusLabel(tooltip.task.status)}
+                {isClusterTooltip ? '周/月视图自动聚合，切到日视图可看单条任务' : `${getTaskTypeLabel(tooltip.task)} · ${getStatusLabel(tooltip.task.status)}`}
               </div>
             </div>
             <button
@@ -800,7 +841,26 @@ export function GanttChart({
                 <span className="text-right font-medium text-gray-900 dark:text-[#f0f6fc]">{value}</span>
               </div>
             ))}
-            {tooltip.task.cronExpr && (
+            {isClusterTooltip && (
+              <div className="mt-3 space-y-1.5 border-t border-gray-100 pt-3 dark:border-[#30363d]">
+                {tooltipTasks.slice(0, 8).map((task) => (
+                  <div key={task.id} className="rounded-md bg-gray-50 px-2.5 py-2 dark:bg-[#0d1117]">
+                    <div className="break-words font-medium text-gray-900 dark:text-[#f0f6fc]">{task.name}</div>
+                    <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-gray-500 dark:text-[#8b949e]">
+                      <span>{format(task.startDate, 'MM-dd HH:mm')}</span>
+                      <span>{getStatusLabel(task.status)}</span>
+                      <span>{formatCompactNames(task.clientNames || [task.clientName], '未返回账号')}</span>
+                    </div>
+                  </div>
+                ))}
+                {tooltipTasks.length > 8 && (
+                  <div className="text-[11px] text-gray-500 dark:text-[#8b949e]">
+                    还有 {tooltipTasks.length - 8} 条任务未展开
+                  </div>
+                )}
+              </div>
+            )}
+            {!isClusterTooltip && tooltip.task.cronExpr && (
               <div className="flex justify-between gap-3">
                 <span className="text-gray-500 dark:text-[#8b949e]">调度规则</span>
                 <span className="break-all text-right font-medium text-gray-900 dark:text-[#f0f6fc]">{tooltip.task.cronExpr}</span>

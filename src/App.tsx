@@ -1967,8 +1967,8 @@ export default function App() {
   ];
 
   const realtimeQueuePanel = (
-    <Card className="flex h-[calc(100vh-180px)] min-h-[640px] w-full min-w-0 flex-col overflow-hidden border-gray-200 shadow-sm dark:border-[#30363d] dark:bg-[#161b22]">
-      <CardHeader className="shrink-0 border-b px-4 py-3 dark:border-[#30363d]">
+    <Card className="w-full min-w-0 overflow-visible border-gray-200 shadow-sm dark:border-[#30363d] dark:bg-[#161b22]">
+      <CardHeader className="border-b px-4 py-3 dark:border-[#30363d]">
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
             <CardTitle className="text-base">实时任务看板</CardTitle>
@@ -1987,8 +1987,8 @@ export default function App() {
         </div>
       </CardHeader>
 
-      <CardContent className="flex min-h-0 flex-1 flex-col p-0">
-        <div className="shrink-0 space-y-2 border-b border-gray-100 bg-white p-3 dark:border-[#30363d] dark:bg-[#161b22]">
+      <CardContent className="p-0">
+        <div className="space-y-2 border-b border-gray-100 bg-white p-3 dark:border-[#30363d] dark:bg-[#161b22]">
           <div className="grid gap-2 lg:grid-cols-[minmax(240px,1fr)_360px]">
             <Input
               placeholder="筛选账号、机器名或任务..."
@@ -2006,7 +2006,7 @@ export default function App() {
             </Tabs>
           </div>
 
-          <div className="flex max-h-14 flex-wrap gap-1.5 overflow-y-auto pr-1">
+          <div className="flex flex-wrap gap-1.5 pr-1">
             {robotStatusFilters.map((item) => (
               <button
                 key={item.value}
@@ -2029,7 +2029,7 @@ export default function App() {
         </div>
 
         {filteredRealtimeQueueRows.length > 0 ? (
-          <div className="min-h-0 flex-1 overflow-y-auto bg-gray-50/70 p-3 dark:bg-[#0d1117]">
+          <div className="bg-gray-50/70 p-3 dark:bg-[#0d1117]">
             <div className="grid gap-2.5 xl:grid-cols-2 2xl:grid-cols-3">
               {filteredRealtimeQueueRows.map((row) => {
                 const currentTask = row.runningTasks[0];
@@ -2144,7 +2144,7 @@ export default function App() {
             </div>
           </div>
         ) : (
-          <div className="flex min-h-0 flex-1 items-center justify-center px-4 py-10 text-center text-sm text-gray-500 dark:text-slate-400">
+          <div className="flex items-center justify-center px-4 py-10 text-center text-sm text-gray-500 dark:text-slate-400">
             当前筛选条件下没有运行中或排队任务
           </div>
         )}
@@ -2202,7 +2202,7 @@ export default function App() {
         </div>
 
         {overviewRows.length > 0 ? (
-          <div className="max-h-[calc(100vh-260px)] min-h-[560px] overflow-auto">
+          <div className="overflow-x-auto overflow-y-visible">
             <div className="min-w-[1020px]">
               <div
                 className="sticky top-0 z-10 grid border-b bg-white text-xs font-medium text-gray-500 dark:border-[#30363d] dark:bg-[#161b22] dark:text-[#8b949e]"
@@ -2312,7 +2312,7 @@ export default function App() {
   );
 
   const ganttPanel = (
-    <Card className="flex h-[calc(100vh-180px)] min-h-[640px] w-full min-w-0 flex-col border-gray-200 shadow-sm dark:border-[#30363d] dark:bg-[#161b22]">
+    <Card className="w-full min-w-0 overflow-visible border-gray-200 shadow-sm dark:border-[#30363d] dark:bg-[#161b22]">
       <CardHeader className="border-b pb-4 dark:border-[#30363d]">
         <div className="space-y-4">
           <div className="flex items-center justify-between gap-3">
@@ -2368,14 +2368,14 @@ export default function App() {
         </div>
       </CardHeader>
 
-      <CardContent className="min-h-0 flex-1 p-0">
+      <CardContent className="p-0">
         {loading && tasks.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-24 text-gray-400">
             <Loader2 className="mb-4 h-8 w-8 animate-spin text-primary" />
             <p>正在按分页拉取任务、执行记录和运行结果，请稍候...</p>
           </div>
         ) : filteredTasks.length > 0 ? (
-          <div className="h-full p-3">
+          <div className="p-3">
             <GanttChart
               tasks={filteredTasks}
               viewMode={viewMode}

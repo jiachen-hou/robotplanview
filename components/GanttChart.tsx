@@ -605,8 +605,8 @@ export function GanttChart({
     : [];
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-md border bg-white shadow-sm dark:border-[#30363d] dark:bg-[#161b22]">
-      <div ref={scrollContainerRef} className="flex-1 overflow-auto shadow-inner">
+    <div className="w-full overflow-visible rounded-md border bg-white shadow-sm dark:border-[#30363d] dark:bg-[#161b22]">
+      <div ref={scrollContainerRef} className="overflow-x-auto overflow-y-visible shadow-inner">
         <div className="relative min-w-max">
           <div className="sticky top-0 z-30 flex border-b bg-gray-50 shadow-sm dark:border-[#30363d] dark:bg-[#21262d]">
             <div className="sticky left-0 z-40 flex w-72 shrink-0 items-center border-r bg-gray-50 p-2 text-sm font-semibold dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#f0f6fc]">

@@ -15,7 +15,7 @@ import {
 } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import CronExpressionParser from 'cron-parser';
-import { Loader2, Calendar as CalendarIcon, KeyRound, RefreshCw, Bot, ChevronLeft, ChevronRight, Moon, Sun, Users } from 'lucide-react';
+import { Loader2, Calendar as CalendarIcon, KeyRound, RefreshCw, Bot, ChevronLeft, ChevronRight, Moon, Sun, Users, X } from 'lucide-react';
 
 import { GanttChart, ScheduleTask, ViewMode } from '@/components/GanttChart';
 import { Button } from '@/components/ui/button';
@@ -2392,12 +2392,25 @@ export default function App() {
                 </TabsList>
               </Tabs>
 
-              <Input
-                placeholder="搜索任务、应用或机器人..."
-                value={searchTerm}
-                onChange={(event) => setSearchTerm(event.target.value)}
-                className="w-full"
-              />
+              <div className="relative">
+                <Input
+                  placeholder="搜索任务、应用或机器人..."
+                  value={searchTerm}
+                  onChange={(event) => setSearchTerm(event.target.value)}
+                  className="w-full pr-9"
+                />
+                {searchTerm && (
+                  <button
+                    type="button"
+                    aria-label="清空搜索"
+                    title="清空搜索"
+                    onClick={() => setSearchTerm('')}
+                    className="absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-gray-400 transition hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 dark:hover:bg-[#21262d] dark:hover:text-[#c9d1d9]"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
 
               <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as ViewMode)} className="w-full">
                 <TabsList className="grid w-full grid-cols-4">

@@ -225,6 +225,11 @@ interface SkippedScheduleInfo {
   nextTime?: string | null;
 }
 
+interface ScheduleReadSummary {
+  total: number;
+  unschedulable: number;
+}
+
 export interface ExtendedScheduleTask extends ScheduleTask {
   robotName?: string;
   robotNames?: string[];
@@ -493,6 +498,13 @@ function hasPredictableFuture(item: ScheduleItem): boolean {
   return Boolean(cronExpression || nextTime);
 }
 
+function getScheduleReadSummary(items: ScheduleItem[]): ScheduleReadSummary {
+  return {
+    total: items.length,
+    unschedulable: items.filter((item) => isEnabledSchedule(item) && !hasPredictableFuture(item)).length,
+  };
+}
+
 function isFinishedStatus(status?: string, statusName?: string): boolean {
   return ['finish', 'finished', 'success'].includes((status || '').toLowerCase())
     || ['完成', '成功'].includes(statusName || '');
@@ -625,7 +637,7 @@ export default function App() {
   const [robotClients, setRobotClients] = useState<RobotClient[]>([]);
   const [robotGroups, setRobotGroups] = useState<RobotGroup[]>([]);
   const [realtimeQueueRows, setRealtimeQueueRows] = useState<RealtimeQueueRow[]>([]);
-  const [rawResponse, setRawResponse] = useState<any>(null);
+  const [scheduleReadSummary, setScheduleReadSummary] = useState<ScheduleReadSummary>({ total: 0, unschedulable: 0 });
   const [searchTerm, setSearchTerm] = useState('');
   const [loadingProgress, setLoadingProgress] = useState<LoadingProgress>(INITIAL_LOADING_PROGRESS);
   const [activeSchedules, setActiveSchedules] = useState<LoadingActivity[]>([]);
@@ -782,10 +794,6 @@ export default function App() {
         payload: { page, size: SCHEDULE_PAGE_SIZE },
       });
 
-      if (page === 1) {
-        setRawResponse(response);
-      }
-
       const list = parseApiList<ScheduleItem>(response);
       if (!list.length) {
         if (page === 1) {
@@ -795,7 +803,6 @@ export default function App() {
           });
           const fallbackList = parseApiList<ScheduleItem>(fallbackResponse);
           if (fallbackList.length) {
-            setRawResponse(fallbackResponse);
             allSchedules.push(...fallbackList);
           }
         }
@@ -1283,6 +1290,7 @@ export default function App() {
       fetchRobotClients(accessToken),
       fetchRobotGroups(accessToken),
     ]);
+    setScheduleReadSummary(getScheduleReadSummary(allSchedules));
 
     const existingSchedules = new Map<string, ScheduleDetail>(
       schedulesRef.current
@@ -1342,6 +1350,7 @@ export default function App() {
     setError('');
     setActiveSchedules([]);
     setRecentlyCompletedSchedules([]);
+    setScheduleReadSummary({ total: 0, unschedulable: 0 });
     setLoadingProgress({
       ...INITIAL_LOADING_PROGRESS,
       phase: 'catalog',
@@ -1354,6 +1363,7 @@ export default function App() {
         fetchRobotClients(accessToken),
         fetchRobotGroups(accessToken),
       ]);
+      setScheduleReadSummary(getScheduleReadSummary(allSchedules));
 
       const queueRows = await buildRealtimeQueueRows(accessToken, clientList);
       setRealtimeQueueRows(mergeRealtimeRowsWithGrace(queueRows));
@@ -2401,10 +2411,9 @@ export default function App() {
             ) : (
               <>
                 <p className="mb-4">当前没有生成可展示的计划任务。</p>
-                {(schedules.length > 0 || rawResponse) && (
-                  <div className="max-h-96 overflow-auto rounded-md bg-gray-100 p-4 text-left font-mono text-xs dark:bg-[#0d1117] dark:text-[#c9d1d9]">
-                    <p className="mb-2 font-bold">调试信息（首屏原始响应）</p>
-                    <pre>{JSON.stringify(rawResponse || schedules, null, 2)}</pre>
+                {scheduleReadSummary.total > 0 && (
+                  <div className="mx-auto max-w-xl rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-left text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100">
+                    已读取到 {scheduleReadSummary.total} 个任务，其中 {scheduleReadSummary.unschedulable} 个为手动任务或无下次执行时间，无法生成至甘特图。
                   </div>
                 )}
               </>
@@ -2513,7 +2522,7 @@ export default function App() {
                 setRobotClients([]);
                 setRobotGroups([]);
                 setRealtimeQueueRows([]);
-                setRawResponse(null);
+                setScheduleReadSummary({ total: 0, unschedulable: 0 });
               }}
               className="h-8 px-2"
             >

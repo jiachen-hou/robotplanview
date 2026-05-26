@@ -227,7 +227,9 @@ interface SkippedScheduleInfo {
 
 interface ScheduleReadSummary {
   total: number;
+  disabled: number;
   unschedulable: number;
+  schedulable: number;
 }
 
 export interface ExtendedScheduleTask extends ScheduleTask {
@@ -499,9 +501,15 @@ function hasPredictableFuture(item: ScheduleItem): boolean {
 }
 
 function getScheduleReadSummary(items: ScheduleItem[]): ScheduleReadSummary {
+  const disabled = items.filter((item) => !isEnabledSchedule(item)).length;
+  const unschedulable = items.filter((item) => isEnabledSchedule(item) && !hasPredictableFuture(item)).length;
+  const schedulable = items.filter((item) => isEnabledSchedule(item) && hasPredictableFuture(item)).length;
+
   return {
     total: items.length,
-    unschedulable: items.filter((item) => isEnabledSchedule(item) && !hasPredictableFuture(item)).length,
+    disabled,
+    unschedulable,
+    schedulable,
   };
 }
 
@@ -637,7 +645,12 @@ export default function App() {
   const [robotClients, setRobotClients] = useState<RobotClient[]>([]);
   const [robotGroups, setRobotGroups] = useState<RobotGroup[]>([]);
   const [realtimeQueueRows, setRealtimeQueueRows] = useState<RealtimeQueueRow[]>([]);
-  const [scheduleReadSummary, setScheduleReadSummary] = useState<ScheduleReadSummary>({ total: 0, unschedulable: 0 });
+  const [scheduleReadSummary, setScheduleReadSummary] = useState<ScheduleReadSummary>({
+    total: 0,
+    disabled: 0,
+    unschedulable: 0,
+    schedulable: 0,
+  });
   const [searchTerm, setSearchTerm] = useState('');
   const [loadingProgress, setLoadingProgress] = useState<LoadingProgress>(INITIAL_LOADING_PROGRESS);
   const [activeSchedules, setActiveSchedules] = useState<LoadingActivity[]>([]);
@@ -1350,7 +1363,7 @@ export default function App() {
     setError('');
     setActiveSchedules([]);
     setRecentlyCompletedSchedules([]);
-    setScheduleReadSummary({ total: 0, unschedulable: 0 });
+    setScheduleReadSummary({ total: 0, disabled: 0, unschedulable: 0, schedulable: 0 });
     setLoadingProgress({
       ...INITIAL_LOADING_PROGRESS,
       phase: 'catalog',
@@ -2413,7 +2426,10 @@ export default function App() {
                 <p className="mb-4">当前没有生成可展示的计划任务。</p>
                 {scheduleReadSummary.total > 0 && (
                   <div className="mx-auto max-w-xl rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-left text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100">
-                    已读取到 {scheduleReadSummary.total} 个任务，其中 {scheduleReadSummary.unschedulable} 个为手动任务或无下次执行时间，无法生成至甘特图。
+                    已读取到 {scheduleReadSummary.total} 个任务，其中 {scheduleReadSummary.disabled} 个已停用，{scheduleReadSummary.unschedulable} 个为手动任务或无下次执行时间，无法生成至甘特图。
+                    {scheduleReadSummary.schedulable > 0 && (
+                      <span> 另有 {scheduleReadSummary.schedulable} 个任务具备排程规则，但当前推算范围内没有可展示记录。</span>
+                    )}
                   </div>
                 )}
               </>
@@ -2522,7 +2538,7 @@ export default function App() {
                 setRobotClients([]);
                 setRobotGroups([]);
                 setRealtimeQueueRows([]);
-                setScheduleReadSummary({ total: 0, unschedulable: 0 });
+                setScheduleReadSummary({ total: 0, disabled: 0, unschedulable: 0, schedulable: 0 });
               }}
               className="h-8 px-2"
             >

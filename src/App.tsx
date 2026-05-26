@@ -1866,6 +1866,18 @@ export default function App() {
     setDashboardPage('gantt');
   };
 
+  const openGanttForRealtimeRow = (row: RealtimeQueueRow) => {
+    const focusTime = row.runningTasks[0]?.startedAt
+      || row.runningTasks[0]?.updatedAt
+      || row.queuedTasks[0]?.updatedAt;
+
+    setSearchTerm(row.accountName);
+    setGroupBy('account');
+    setViewMode('Day');
+    setCurrentDate(parseDateValue(focusTime) || new Date());
+    setDashboardPage('gantt');
+  };
+
   const filteredTasks = useMemo(() => {
     if (!searchTerm.trim()) return timelineTasks;
     const keyword = searchTerm.trim().toLowerCase();
@@ -2072,7 +2084,16 @@ export default function App() {
                 return (
                   <div
                     key={row.accountKey}
-                    className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm dark:border-[#30363d] dark:bg-[#161b22]"
+                    role="button"
+                    tabIndex={0}
+                    title={`查看 ${row.accountName} 的甘特图任务`}
+                    onClick={() => openGanttForRealtimeRow(row)}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Enter' && event.key !== ' ') return;
+                      event.preventDefault();
+                      openGanttForRealtimeRow(row);
+                    }}
+                    className="rounded-lg border border-gray-200 bg-white p-3 text-left shadow-sm transition hover:border-blue-300 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 dark:border-[#30363d] dark:bg-[#161b22] dark:hover:border-[#58a6ff]"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">

@@ -438,9 +438,12 @@ export function GanttChart({
     const visibleStart = task.startDate < startDate ? startDate : task.startDate;
     const visibleEnd = task.endDate > endDate ? endDate : task.endDate;
     const totalMs = Math.max(1, totalMinutes * 60 * 1000);
-    const rawLeftPx = Math.max(0, ((visibleStart.getTime() - startDate.getTime()) / totalMs) * gridMinWidth);
-    const rightPx = Math.min(gridMinWidth, ((visibleEnd.getTime() - startDate.getTime()) / totalMs) * gridMinWidth);
-    const rawWidthPx = Math.max(0, ((visibleEnd.getTime() - visibleStart.getTime()) / totalMs) * gridMinWidth);
+    const rawLeftPercent = Math.max(0, ((visibleStart.getTime() - startDate.getTime()) / totalMs) * 100);
+    const rightPercent = Math.min(100, ((visibleEnd.getTime() - startDate.getTime()) / totalMs) * 100);
+    const rawWidthPercent = Math.max(0, ((visibleEnd.getTime() - visibleStart.getTime()) / totalMs) * 100);
+    const rawLeftPx = (rawLeftPercent / 100) * gridMinWidth;
+    const rightPx = (rightPercent / 100) * gridMinWidth;
+    const rawWidthPx = (rawWidthPercent / 100) * gridMinWidth;
     const realtimeMinWidth = task.isRealtime ? 8 : minVisibleTaskWidth;
     const widthPx = Math.min(
       Math.max(realtimeMinWidth, rawWidthPx),
@@ -449,9 +452,13 @@ export function GanttChart({
     const leftPx = task.isRealtime ? Math.max(0, rightPx - widthPx) : rawLeftPx;
 
     return {
+      leftPercent: task.isRealtime ? Math.max(0, rightPercent - rawWidthPercent) : rawLeftPercent,
       leftPx,
+      minWidthPx: realtimeMinWidth,
       rawWidthPx,
+      rightPercent,
       topPx: 4 + task.lane * 18,
+      widthPercent: rawWidthPercent,
       widthPx,
     };
   };
@@ -481,10 +488,14 @@ export function GanttChart({
         task: item.task,
         tasks: [item.task],
         isCluster: false,
+        leftPercent: item.leftPercent,
         leftPx: item.leftPx,
+        minWidthPx: item.minWidthPx,
         rawWidthPx: item.rawWidthPx,
+        rightPercent: item.rightPercent,
         title: item.task.name,
         topPx: item.topPx,
+        widthPercent: item.widthPercent,
         widthPx: item.widthPx,
         color: getTaskColor(item.task),
       }));
@@ -527,10 +538,14 @@ export function GanttChart({
         task: firstItem.task,
         tasks: clusterTasks,
         isCluster: clusterItems.length > 1,
+        leftPercent: (leftPx / gridMinWidth) * 100,
         leftPx,
+        minWidthPx: clusterItems.length > 1 ? 24 : firstItem.minWidthPx,
         rawWidthPx: rightPx - leftPx,
+        rightPercent: (rightPx / gridMinWidth) * 100,
         title,
         topPx: firstItem.topPx,
+        widthPercent: (widthPx / gridMinWidth) * 100,
         widthPx,
         color: clusterItems.length > 1 ? getClusterColor(clusterTasks) : getTaskColor(firstItem.task),
       };
@@ -742,6 +757,15 @@ export function GanttChart({
                     {buildGanttItems(group.executions).map((item) => {
                       const task = item.task;
                       const labelMinWidth = viewMode === 'Day' ? 28 : 40;
+                      const itemStyle: React.CSSProperties = {
+                        top: `${item.topPx}px`,
+                        width: `${item.widthPercent}%`,
+                        minWidth: `${item.minWidthPx}px`,
+                        backgroundColor: item.color,
+                        ...(task.isRealtime && !item.isCluster
+                          ? { right: `${Math.max(0, 100 - item.rightPercent)}%` }
+                          : { left: `${item.leftPercent}%` }),
+                      };
 
                       return (
                         <div
@@ -755,10 +779,7 @@ export function GanttChart({
                             item.isCluster && 'h-5 justify-center rounded-full px-2 text-[10px] font-semibold opacity-100 ring-2 ring-white/80 dark:ring-[#0d1117]',
                           )}
                           style={{
-                            left: `${item.leftPx}px`,
-                            width: `${item.widthPx}px`,
-                            top: `${item.topPx}px`,
-                            backgroundColor: item.color,
+                            ...itemStyle,
                           }}
                           onMouseEnter={(event) => openTooltip(task, event, false, item.tasks, item.id)}
                           onMouseMove={(event) => {

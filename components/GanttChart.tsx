@@ -1,10 +1,9 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   addDays,
-  differenceInMinutes,
+  addYears,
   eachDayOfInterval,
   endOfMonth,
-  endOfYear,
   format,
   startOfMonth,
   startOfWeek,
@@ -209,8 +208,7 @@ export function GanttChart({
     if (viewMode === 'Day') {
       start = new Date(currentDate);
       start.setHours(0, 0, 0, 0);
-      end = new Date(currentDate);
-      end.setHours(23, 59, 59, 999);
+      end = addDays(start, 1);
       for (let hour = 0; hour < 24; hour += 1) {
         const point = new Date(start);
         point.setHours(hour);
@@ -218,18 +216,16 @@ export function GanttChart({
       }
     } else if (viewMode === 'Week') {
       start = startOfWeek(currentDate, { weekStartsOn: 1 });
-      end = addDays(start, 6);
-      end.setHours(23, 59, 59, 999);
-      nextColumns = eachDayOfInterval({ start, end });
+      end = addDays(start, 7);
+      nextColumns = eachDayOfInterval({ start, end: addDays(end, -1) });
     } else if (viewMode === 'Month') {
       start = startOfMonth(currentDate);
-      end = endOfMonth(currentDate);
-      end.setHours(23, 59, 59, 999);
-      nextColumns = eachDayOfInterval({ start, end });
+      const monthEnd = endOfMonth(currentDate);
+      end = addDays(monthEnd, 1);
+      nextColumns = eachDayOfInterval({ start, end: monthEnd });
     } else {
       start = startOfYear(currentDate);
-      end = endOfYear(currentDate);
-      end.setHours(23, 59, 59, 999);
+      end = addYears(start, 1);
       for (let month = 0; month < 12; month += 1) {
         const point = new Date(start);
         point.setMonth(month);
@@ -249,7 +245,7 @@ export function GanttChart({
       endDate: end,
       headers: nextHeaders,
       columns: nextColumns,
-      totalMinutes: Math.max(1, differenceInMinutes(end, start)),
+      totalMinutes: Math.max(1, (end.getTime() - start.getTime()) / 60000),
     };
   }, [currentDate, viewMode]);
 
@@ -360,7 +356,7 @@ export function GanttChart({
   const groupedTasksWithLanes = useMemo<TaskGroup[]>(
     () => groupedTasks.map((group) => {
       const visibleExecutions = group.executions
-        .filter((task) => task.endDate >= startDate && task.startDate <= endDate)
+        .filter((task) => task.endDate > startDate && task.startDate < endDate)
         .sort((left, right) => left.startDate.getTime() - right.startDate.getTime());
 
       const lanes: Date[] = [];
@@ -407,7 +403,7 @@ export function GanttChart({
     setCurrentPage((value) => Math.min(Math.max(1, value), totalPages));
   }, [totalPages]);
 
-  const isNowVisible = now >= startDate && now <= endDate;
+  const isNowVisible = now >= startDate && now < endDate;
   const nowLeftPercent = isNowVisible
     ? ((now.getTime() - startDate.getTime()) / (totalMinutes * 60 * 1000)) * 100
     : -1;
@@ -648,7 +644,10 @@ export function GanttChart({
               {headers.map((header, index) => (
                 <div
                   key={index}
-                  className="flex items-center justify-center whitespace-nowrap border-r p-2 text-center text-[11px] font-medium text-gray-500 dark:border-[#30363d] dark:text-[#8b949e]"
+                  className={cn(
+                    'flex items-center whitespace-nowrap border-r p-2 text-[11px] font-medium text-gray-500 dark:border-[#30363d] dark:text-[#8b949e]',
+                    viewMode === 'Day' ? 'justify-start text-left' : 'justify-center text-center',
+                  )}
                   style={{ width: `${(header.colSpan / totalColumns) * 100}%` }}
                 >
                   {header.label}
@@ -781,6 +780,9 @@ export function GanttChart({
                             openTooltip(task, event, true, item.tasks, item.id);
                           }}
                         >
+                          {task.isRealtime && (
+                            <span className="pointer-events-none absolute bottom-0 right-0 top-0 w-1 rounded-full bg-blue-700 shadow-[0_0_0_1px_rgba(255,255,255,0.9)] dark:bg-[#79c0ff]" />
+                          )}
                           {item.isCluster
                             ? item.tasks.length
                             : item.rawWidthPx >= labelMinWidth && format(task.startDate, viewMode === 'Day' ? 'HH:mm' : 'MM-dd HH:mm')}

@@ -14,268 +14,75 @@ import {
   subYears,
 } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
-import CronExpressionParser from 'cron-parser';
 import { Loader2, Calendar as CalendarIcon, KeyRound, RefreshCw, Bot, ChevronLeft, ChevronRight, Moon, Sun, Users, X } from 'lucide-react';
 
-import { GanttChart, ScheduleTask, ViewMode } from '@/components/GanttChart';
+import { GanttChart } from '@/components/GanttChart';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
-
-interface CronInterface {
-  type?: string;
-  minute?: number;
-  hour?: number;
-  dayOfWeeks?: number[];
-  month?: number;
-  time?: string;
-  nextTime?: string;
-  cronExpress?: string;
-}
-
-interface ScheduleItem {
-  scheduleUuid: string;
-  scheduleName: string;
-  scheduleType: string;
-  enabled: boolean | string;
-  cronInterface?: CronInterface | string;
-  nextTime?: string;
-  nextRunTime?: string;
-  [key: string]: any;
-}
-
-interface RobotInfo {
-  robotUuid?: string;
-  robotName?: string;
-}
-
-interface RobotClientInfo {
-  uuid?: string;
-  robotClientUuid?: string;
-  robotClientName?: string;
-  statusName?: string;
-  windowsUserName?: string;
-}
-
-interface RobotClientGroupInfo {
-  uuid?: string;
-  robotClientGroupUuid?: string;
-  robotClientGroupName?: string;
-  name?: string;
-}
-
-interface RobotGroupInfo {
-  uuid?: string;
-  robotGroupUuid?: string;
-  robotGroupName?: string;
-  name?: string;
-}
-
-interface HistoricalRun {
-  id: string;
-  start: Date;
-  end: Date;
-  status: string;
-  robotNames: string[];
-  clientNames: string[];
-}
-
-interface ScheduleDetail extends ScheduleItem {
-  robotList?: RobotInfo[];
-  robotClientList?: RobotClientInfo[];
-  robotClientGroupList?: RobotClientGroupInfo[];
-  robotGroupList?: RobotGroupInfo[];
-  robotClientGroup?: {
-    uuid?: string;
-    name?: string;
-  };
-  averageDurationMins?: number;
-  historicalRuns?: HistoricalRun[];
-  completedRunCount?: number;
-  derivedRobotNames?: string[];
-  derivedClientNames?: string[];
-}
-
-interface RobotClient {
-  robotClientUuid?: string;
-  robotClientName?: string;
-  status?: string;
-  windowsUserName?: string;
-  clientIp?: string;
-  machineName?: string;
-  clientVersion?: string;
-  createTime?: string;
-}
-
-interface RobotGroup {
-  uuid: string;
-  name: string;
-}
-
-interface TaskClient {
-  robotClientUuid?: string;
-  robotClientName?: string;
-  currentRobotUuid?: string;
-  currentRobotName?: string;
-  sceneInstStartTime?: string;
-  clientStatus?: string;
-  clientStatusName?: string;
-  windowsUserName?: string;
-}
-
-interface TaskListRecord {
-  id?: number | string;
-  taskUuid?: string;
-  uuid?: string;
-  taskName?: string;
-  createTime?: string;
-  updateTime?: string;
-  startTime?: string;
-  endTime?: string;
-  sourceUuid?: string;
-  sourceType?: string;
-  status?: string;
-  statusName?: string;
-  userName?: string;
-  taskClients?: TaskClient[];
-}
-
-interface RobotJobRecord {
-  id?: number | string;
-  jobUuid?: string;
-  taskUuid?: string;
-  taskName?: string;
-  status?: string;
-  statusName?: string;
-  remark?: string;
-  triggerTime?: string;
-  startTime?: string;
-  endTime?: string;
-  createTime?: string;
-  updateTime?: string;
-  sourceUuid?: string;
-  robotUuid?: string;
-  robotName?: string;
-  robotClientUuid?: string;
-  robotClientName?: string;
-}
-
-interface RealtimeQueueTask {
-  taskUuid: string;
-  taskName: string;
-  scheduleUuid: string;
-  scheduleName: string;
-  status: 'running' | 'queued';
-  robotName?: string;
-  startedAt?: string;
-  updatedAt?: string;
-  lastSeenAt?: number;
-}
-
-interface RealtimeQueueRow {
-  accountKey: string;
-  accountName: string;
-  robotClientUuid?: string;
-  robotStatus: string;
-  robotStatusLabel: string;
-  machineName?: string;
-  clientIp?: string;
-  runningTasks: RealtimeQueueTask[];
-  queuedTasks: RealtimeQueueTask[];
-}
-
-type QueueStatusFilter = 'all' | 'running' | 'queued';
-type RobotStatusFilter = 'all' | 'running' | 'idle' | 'allocated' | 'connected' | 'offline' | 'unknown';
-type TimelineGroupBy = 'task' | 'account';
-type ThemeMode = 'light' | 'dark';
-type DashboardPage = 'overview' | 'realtime' | 'gantt';
-
-interface LoadingProgress {
-  phase: 'idle' | 'auth' | 'catalog' | 'hydrating' | 'rendering';
-  message: string;
-  discoveredSchedules: number;
-  processedSchedules: number;
-  completedSamples: number;
-  averageScheduleMs: number;
-  etaSeconds: number | null;
-}
-
-interface LoadingActivity {
-  scheduleUuid: string;
-  scheduleName: string;
-  startedAt: number;
-}
-
-interface CompletedActivity {
-  scheduleUuid: string;
-  scheduleName: string;
-  durationMs: number;
-  successfulSamples: number;
-  finishedAt: number;
-}
-
-interface SkippedScheduleInfo {
-  scheduleUuid: string;
-  scheduleName: string;
-  reason: 'no_schedule_rule' | 'next_time_in_past' | 'cron_parse_failed' | 'no_future_occurrence_within_horizon';
-  cronExpression?: string | null;
-  nextTime?: string | null;
-}
-
-interface ScheduleReadSummary {
-  total: number;
-  disabled: number;
-  unschedulable: number;
-  schedulable: number;
-}
-
-export interface ExtendedScheduleTask extends ScheduleTask {
-  robotName?: string;
-  robotNames?: string[];
-  clientName?: string;
-  clientNames?: string[];
-  actualClientNames?: string[];
-  configuredClientNames?: string[];
-  groupNames?: string[];
-  executionScopeType?: 'account' | 'group' | 'mixed' | 'realtime' | 'unknown';
-  executionScopeLabel?: string;
-  taskGroupKey?: string;
-  isHistorical?: boolean;
-  isRealtime?: boolean;
-  estimatedEndDate?: Date;
-  scheduleUuid?: string;
-  cronExpr?: string | null;
-}
-
-interface RealtimeTaskScope {
-  scheduleName: string;
-  scheduleUuid?: string;
-  groupNames: string[];
-  executionScopeType: ExtendedScheduleTask['executionScopeType'];
-  executionScopeLabel: string;
-}
-
-interface OverviewScopeCell {
-  date: Date;
-  total: number;
-  running: number;
-  queued: number;
-  completed: number;
-}
-
-interface OverviewScopeRow {
-  id: string;
-  name: string;
-  isGroup: boolean;
-  total: number;
-  running: number;
-  queued: number;
-  completed: number;
-  cells: OverviewScopeCell[];
-}
+import {
+  findByLookupKey,
+  formatNamesForLabel,
+  mapWithConcurrency,
+  matchesAccountKeyword,
+  normalizeLookupKey,
+  uniqueStrings,
+} from '@/src/domain/common';
+import {
+  getTaskOverviewScopes,
+  taskOverlapsRange,
+} from '@/src/domain/overview';
+import { getQueueTaskIdentity } from '@/src/domain/taskIdentity';
+import { generateScheduleTasks } from '@/src/domain/timelineTasks';
+import {
+  collectClientNames,
+  collectRobotNames,
+  describeExecutionScope,
+  getCronExpression,
+  getRobotStatusLabel,
+  getScheduleConfiguredAccountNames,
+  getScheduleGroupNames,
+  getScheduleReadSummary,
+  getTaskDurationMs,
+  getTaskRecordEnd,
+  getTaskRecordStart,
+  hasPredictableFuture,
+  isEnabledSchedule,
+  isFinishedStatus,
+  isRunningStatus,
+  isWaitingStatus,
+  parseApiList,
+  parseCronInterface,
+  parseDateValue,
+} from '@/src/domain/yingdao';
+import type {
+  CompletedActivity,
+  DashboardPage,
+  ExtendedScheduleTask,
+  HistoricalRun,
+  LoadingActivity,
+  LoadingProgress,
+  OverviewScopeRow,
+  QueueStatusFilter,
+  RealtimeQueueRow,
+  RealtimeQueueTask,
+  RealtimeTaskScope,
+  RobotClient,
+  RobotGroup,
+  RobotJobRecord,
+  RobotStatusFilter,
+  ScheduleDetail,
+  ScheduleItem,
+  ScheduleReadSummary,
+  SkippedScheduleInfo,
+  TaskListRecord,
+  ThemeMode,
+  TimelineGroupBy,
+  ViewMode,
+} from '@/src/types/dashboard';
 
 const SCHEDULE_PAGE_SIZE = 200;
 const TASK_PAGE_SIZE = 100;
@@ -289,6 +96,8 @@ const REALTIME_TASK_GRACE_MS = 2 * 60 * 1000;
 const REALTIME_JOB_PAGE_SIZE = 50;
 const REALTIME_JOB_CONCURRENCY = 1;
 
+type GanttStatusFilter = 'all' | 'running' | 'pending' | 'historical' | 'future';
+
 const INITIAL_LOADING_PROGRESS: LoadingProgress = {
   phase: 'idle',
   message: '',
@@ -299,343 +108,19 @@ const INITIAL_LOADING_PROGRESS: LoadingProgress = {
   etaSeconds: null,
 };
 
-function uniqueStrings(values: Array<string | undefined | null>): string[] {
-  return [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])];
-}
-
-function matchesAccountKeyword(value: string | undefined, keyword: string): boolean {
-  if (!value) return false;
-  const normalizedValue = value.trim().toLowerCase();
-  const normalizedKeyword = keyword.trim().toLowerCase();
-  if (!normalizedValue || !normalizedKeyword) return false;
-
-  if (normalizedValue === normalizedKeyword) return true;
-
-  const accountPart = normalizedValue.split('@')[0];
-  return normalizedValue.includes(normalizedKeyword) || accountPart.includes(normalizedKeyword);
-}
-
-function normalizeLookupKey(value?: string | null): string {
-  return String(value || '').trim().toLowerCase();
-}
-
-function formatNamesForLabel(names: string[], emptyText: string): string {
-  const uniqueNames = uniqueStrings(names);
-  if (uniqueNames.length === 0) return emptyText;
-  if (uniqueNames.length <= 2) return uniqueNames.join('、');
-  return `${uniqueNames.slice(0, 2).join('、')} 等 ${uniqueNames.length} 个`;
-}
-
-function findByLookupKey<T>(lookupMap: ReadonlyMap<string, T>, value?: string | null): T | undefined {
-  const key = normalizeLookupKey(value);
-  if (!key) return undefined;
-  return lookupMap.get(key)
-    || [...lookupMap.entries()].find(([name]) => name.includes(key) || key.includes(name))?.[1];
-}
-
-function getTaskActualAccountNames(task: ExtendedScheduleTask): string[] {
-  const actualNames = uniqueStrings(task.actualClientNames || []);
-  if (actualNames.length > 0) return actualNames;
-
-  return uniqueStrings([...(task.clientNames || []), task.clientName]);
-}
-
-function getTaskOverviewScopes(task: ExtendedScheduleTask): Array<{ name: string; isGroup: boolean }> {
-  const groupNames = uniqueStrings(task.groupNames || []);
-  if (groupNames.length > 0) {
-    return groupNames.map((name) => ({ name, isGroup: true }));
-  }
-
-  const accountNames = getTaskActualAccountNames(task);
-  if (accountNames.length > 0) {
-    return accountNames.map((name) => ({ name, isGroup: false }));
-  }
-
-  return [{ name: '未指定账号', isGroup: false }];
-}
-
-function taskOverlapsRange(task: ExtendedScheduleTask, start: Date, end: Date): boolean {
-  return task.startDate <= end && task.endDate >= start;
-}
-
-function getScheduleGroupNames(detail: Partial<ScheduleDetail>): string[] {
-  return uniqueStrings([
-    ...(detail.robotClientGroupList?.flatMap((item) => [item.robotClientGroupName, item.name]) || []),
-    ...(detail.robotGroupList?.flatMap((item) => [item.robotGroupName, item.name]) || []),
-    detail.robotClientGroup?.name,
-    (detail as any).clientGroupName,
-    (detail as any).robotGroupName,
-  ]);
-}
-
-function getScheduleConfiguredAccountNames(detail: Partial<ScheduleDetail>): string[] {
-  return uniqueStrings([
-    ...(detail.robotClientList?.flatMap((client) => [client.robotClientName, client.windowsUserName]) || []),
-  ]);
-}
-
-function describeExecutionScope(
-  groupNames: string[],
-  configuredAccountNames: string[],
-  clientNames: string[] = [],
-): { executionScopeType: ExtendedScheduleTask['executionScopeType']; executionScopeLabel: string } {
-  const executionScopeType: ExtendedScheduleTask['executionScopeType'] = groupNames.length > 0 && configuredAccountNames.length > 0
-    ? 'mixed'
-    : groupNames.length > 0
-      ? 'group'
-      : configuredAccountNames.length > 0
-        ? 'account'
-        : 'unknown';
-
-  const executionScopeLabel = executionScopeType === 'mixed'
-    ? `指定账号 ${formatNamesForLabel(configuredAccountNames, '未返回账号')}；机器人组 ${formatNamesForLabel(groupNames, '未返回分组')}`
-    : executionScopeType === 'group'
-      ? `从机器人组 ${formatNamesForLabel(groupNames, '未返回分组')} 中调度`
-      : executionScopeType === 'account'
-        ? `指定账号 ${formatNamesForLabel(configuredAccountNames, '未返回账号')}`
-        : clientNames.length > 0
-          ? `历史账号 ${formatNamesForLabel(clientNames, '未返回账号')}`
-          : '未指定执行范围';
-
-  return { executionScopeType, executionScopeLabel };
-}
-
-function parseDateValue(value?: string | number | null): Date | null {
-  if (value === null || value === undefined || value === '') return null;
-  if (typeof value === 'number') {
-    return new Date(value > 9999999999 ? value : value * 1000);
-  }
-  const parsed = new Date(value.replace(' ', 'T'));
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-function parseApiList<T>(payload: any): T[] {
-  if (Array.isArray(payload?.data)) return payload.data;
-  if (Array.isArray(payload?.data?.dataList)) return payload.data.dataList;
-  if (Array.isArray(payload?.data?.data)) return payload.data.data;
-  if (Array.isArray(payload?.data?.list)) return payload.data.list;
-  if (Array.isArray(payload?.data?.records)) return payload.data.records;
-  if (Array.isArray(payload?.list)) return payload.list;
-  if (Array.isArray(payload?.records)) return payload.records;
-  if (Array.isArray(payload)) return payload;
-  return [];
-}
-
-
-function parseCronInterface(cronInterface?: CronInterface | string | null): CronInterface | null {
-  if (!cronInterface) return null;
-  if (typeof cronInterface === 'string') {
-    try {
-      return JSON.parse(cronInterface);
-    } catch {
-      return null;
-    }
-  }
-  return cronInterface;
-}
-
-function getCronExpression(cronInterface?: CronInterface | null): string | null {
-  if (!cronInterface) return null;
-  if (cronInterface.cronExpress) return cronInterface.cronExpress;
-
-  const parseTime = (timeStr?: string) => {
-    if (!timeStr) return null;
-    const parts = timeStr.split(':');
-    if (parts.length < 2) return null;
-    return {
-      hour: Number.parseInt(parts[0], 10),
-      minute: Number.parseInt(parts[1], 10),
-    };
-  };
-
-  if (cronInterface.type === 'minute') {
-    const minute = Number.parseInt(String(cronInterface.minute ?? 1), 10) || 1;
-    return `*/${minute} * * * *`;
-  }
-
-  if (cronInterface.type === 'hour') {
-    const minute = Number.parseInt(String(cronInterface.minute ?? 0), 10) || 0;
-    return `${minute} * * * *`;
-  }
-
-  if (cronInterface.type === 'day') {
-    const timeInfo = parseTime(cronInterface.time);
-    const minute = timeInfo?.minute ?? (Number.parseInt(String(cronInterface.minute ?? 0), 10) || 0);
-    const hour = timeInfo?.hour ?? (Number.parseInt(String(cronInterface.hour ?? 0), 10) || 0);
-    return `${minute} ${hour} * * *`;
-  }
-
-  if (cronInterface.type === 'week') {
-    const timeInfo = parseTime(cronInterface.time);
-    const minute = timeInfo?.minute ?? (Number.parseInt(String(cronInterface.minute ?? 0), 10) || 0);
-    const hour = timeInfo?.hour ?? (Number.parseInt(String(cronInterface.hour ?? 0), 10) || 0);
-    const dayOfWeeks = cronInterface.dayOfWeeks?.length
-      ? cronInterface.dayOfWeeks.map((day) => (Number(day) - 1 + 7) % 7).join(',')
-      : '*';
-    return `${minute} ${hour} * * ${dayOfWeeks}`;
-  }
-
-  if (cronInterface.type === 'month') {
-    const timeInfo = parseTime(cronInterface.time);
-    const minute = timeInfo?.minute ?? (Number.parseInt(String(cronInterface.minute ?? 0), 10) || 0);
-    const hour = timeInfo?.hour ?? (Number.parseInt(String(cronInterface.hour ?? 0), 10) || 0);
-    const dayOfMonth = Number.parseInt(String(cronInterface.month ?? 1), 10) || 1;
-    return `${minute} ${hour} ${dayOfMonth} * *`;
-  }
-
-  return null;
-}
-
-function isEnabledSchedule(item: ScheduleItem): boolean {
-  if (item.enabled === false) return false;
-  if (item.enabled === 'false') return false;
-  if ((item as any).status === 0) return false;
-  return true;
-}
-
-function hasPredictableFuture(item: ScheduleItem): boolean {
-  const cronInterface = parseCronInterface(item.cronInterface);
-  const cronExpression = getCronExpression(cronInterface);
-  const nextTime = cronInterface?.nextTime || item.nextTime || item.nextRunTime;
-  return Boolean(cronExpression || nextTime);
-}
-
-function getScheduleReadSummary(items: ScheduleItem[]): ScheduleReadSummary {
-  const disabled = items.filter((item) => !isEnabledSchedule(item)).length;
-  const unschedulable = items.filter((item) => isEnabledSchedule(item) && !hasPredictableFuture(item)).length;
-  const schedulable = items.filter((item) => isEnabledSchedule(item) && hasPredictableFuture(item)).length;
-
-  return {
-    total: items.length,
-    disabled,
-    unschedulable,
-    schedulable,
-  };
-}
-
-function isFinishedStatus(status?: string, statusName?: string): boolean {
-  return ['finish', 'finished', 'success'].includes((status || '').toLowerCase())
-    || ['完成', '成功'].includes(statusName || '');
-}
-
-function isRunningStatus(status?: string, statusName?: string): boolean {
-  return ['running', 'process'].includes((status || '').toLowerCase())
-    || ['运行中', '执行中'].includes(statusName || '');
-}
-
-function isWaitingStatus(status?: string, statusName?: string): boolean {
-  return ['waiting', 'allocated', 'created'].includes((status || '').toLowerCase())
-    || ['等待调度', '排队中', '已分配'].includes(statusName || '');
-}
-
-function getRobotStatusLabel(status?: string): string {
-  switch ((status || '').toLowerCase()) {
-    case 'running':
-      return '运行中';
-    case 'idle':
-      return '空闲';
-    case 'allocated':
-      return '已分配';
-    case 'connected':
-      return '已连接';
-    case 'offline':
-      return '离线';
-    default:
-      return status || '未知';
-  }
-}
-
-function getTaskClientEffectiveState(record: TaskListRecord, client?: TaskClient): 'running' | 'queued' | null {
-  const hasClientStatus = Boolean(client?.clientStatus || client?.clientStatusName);
-
-  if (hasClientStatus && isRunningStatus(client?.clientStatus, client?.clientStatusName)) {
-    return 'running';
-  }
-
-  if (hasClientStatus && isWaitingStatus(client?.clientStatus, client?.clientStatusName)) {
-    return 'queued';
-  }
-
-  if (hasClientStatus) return null;
-
-  if (isRunningStatus(record.status, record.statusName)) return 'running';
-  if (isWaitingStatus(record.status, record.statusName)) return 'queued';
-
-  return null;
-}
-
-function getTaskRecordStart(record: TaskListRecord): Date | null {
-  return parseDateValue(record.startTime || record.taskClients?.[0]?.sceneInstStartTime || record.createTime);
-}
-
-function getTaskRecordEnd(record: TaskListRecord): Date | null {
-  return parseDateValue(record.endTime || record.updateTime);
-}
-
-function getTaskDurationMs(record: TaskListRecord): number | null {
-  if (!isFinishedStatus(record.status, record.statusName)) return null;
-
-  const start = parseDateValue(record.taskClients?.[0]?.sceneInstStartTime)
-    || parseDateValue(record.startTime)
-    || parseDateValue(record.createTime);
-  const end = parseDateValue(record.updateTime) || parseDateValue(record.endTime);
-
-  if (!start || !end || end <= start) return null;
-
-  const durationMs = end.getTime() - start.getTime();
-  if (durationMs > MAX_REASONABLE_HISTORY_DURATION_MS) return null;
-
-  return durationMs;
-}
-
-function collectRobotNames(detail: Partial<ScheduleDetail>, taskRecords: TaskListRecord[]): string[] {
-  return uniqueStrings([
-    ...(detail.robotList?.map((item) => item.robotName) || []),
-    ...(taskRecords.flatMap((task) => task.taskClients?.map((client) => client.currentRobotName) || [])),
-    detail.robotName,
-    detail.appName,
-  ]);
-}
-
-function collectClientNames(detail: Partial<ScheduleDetail>, taskRecords: TaskListRecord[]): string[] {
-  return uniqueStrings([
-    ...(detail.robotClientList?.flatMap((item) => [item.robotClientName, item.windowsUserName]) || []),
-    ...(detail.robotClientGroupList?.flatMap((item) => [item.robotClientGroupName, item.name]) || []),
-    ...(detail.robotGroupList?.flatMap((item) => [item.robotGroupName, item.name]) || []),
-    detail.robotClientGroup?.name,
-    (detail as any).clientGroupName,
-    (detail as any).robotGroupName,
-    (detail as any).clientName,
-    (detail as any).creatorName,
-    (detail as any).ownerName,
-    (detail as any).userName,
-    ...(taskRecords.flatMap((task) => task.taskClients?.flatMap((client) => [client.robotClientName, client.windowsUserName]) || [])),
-  ]);
-}
-
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  concurrency: number,
-  mapper: (item: T, index: number) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = new Array(items.length);
-  let nextIndex = 0;
-
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (nextIndex < items.length) {
-      const currentIndex = nextIndex;
-      nextIndex += 1;
-      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
-    }
-  });
-
-  await Promise.all(workers);
-  return results;
+function formatElapsed(now: Date, timestamp?: number): string {
+  if (!timestamp) return '未知时间';
+  const seconds = Math.max(0, Math.round((now.getTime() - timestamp) / 1000));
+  if (seconds < 60) return `${seconds} 秒前`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} 分钟前`;
+  return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟前`;
 }
 
 export default function App() {
   const [accessKeyId, setAccessKeyId] = useState('');
   const [accessKeySecret, setAccessKeySecret] = useState('');
+  const [rememberSecret, setRememberSecret] = useState(false);
   const [token, setToken] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -666,6 +151,7 @@ export default function App() {
   const [dashboardPage, setDashboardPage] = useState<DashboardPage>('overview');
   const [viewMode, setViewMode] = useState<ViewMode>('Week');
   const [groupBy, setGroupBy] = useState<TimelineGroupBy>('task');
+  const [ganttStatusFilter, setGanttStatusFilter] = useState<GanttStatusFilter>('all');
   const [currentDate, setCurrentDate] = useState(new Date());
   const loadingRef = useRef(false);
   const schedulesRef = useRef<ScheduleDetail[]>([]);
@@ -674,10 +160,14 @@ export default function App() {
 
   useEffect(() => {
     const savedId = localStorage.getItem('yingdao_ak_id');
-    const savedSecret = localStorage.getItem('yingdao_ak_secret');
+    const savedRememberSecret = localStorage.getItem('yingdao_remember_secret') === 'true';
+    const savedSecret = savedRememberSecret
+      ? localStorage.getItem('yingdao_ak_secret')
+      : sessionStorage.getItem('yingdao_ak_secret');
     const savedTheme = localStorage.getItem('robotplanview_theme');
     if (savedId) setAccessKeyId(savedId);
     if (savedSecret) setAccessKeySecret(savedSecret);
+    setRememberSecret(savedRememberSecret);
     if (savedTheme === 'dark' || savedTheme === 'light') setThemeMode(savedTheme);
   }, []);
 
@@ -874,7 +364,7 @@ export default function App() {
       });
 
       records.push(...deduped);
-      successfulSamples += deduped.filter((record) => getTaskDurationMs(record) !== null).length;
+      successfulSamples += deduped.filter((record) => getTaskDurationMs(record, MAX_REASONABLE_HISTORY_DURATION_MS) !== null).length;
       const nextCursor = data?.nextId;
       const isStagnantCursor = Boolean(nextCursor && previousNextId && String(nextCursor) === String(previousNextId));
       const hasNoNewRecords = deduped.length === 0;
@@ -934,10 +424,13 @@ export default function App() {
       const previousRow = realtimeQueueRowsRef.current.find((row) => row.accountKey === robotClientUuid);
       let jobRecords: RobotJobRecord[] = [];
       let jobQueryFailed = false;
+      let queueError = '';
+      const queriedAt = Date.now();
       try {
         jobRecords = await fetchRobotJobQueue(accessToken, robotClientUuid);
-      } catch (err) {
+      } catch (err: any) {
         jobQueryFailed = true;
+        queueError = err?.response?.data?.message || err?.message || '队列接口查询失败';
         console.warn(`查询机器人任务队列失败: ${client.robotClientName || robotClientUuid}`, err);
       }
 
@@ -951,6 +444,9 @@ export default function App() {
         clientIp: client.clientIp,
         runningTasks: [],
         queuedTasks: [],
+        queueQueriedAt: queriedAt,
+        queueIsStale: jobQueryFailed,
+        queueError: jobQueryFailed ? queueError : undefined,
       };
 
       if (jobQueryFailed && previousRow) {
@@ -958,6 +454,9 @@ export default function App() {
           ...row,
           runningTasks: previousRow.runningTasks,
           queuedTasks: previousRow.queuedTasks,
+          queueQueriedAt: previousRow.queueQueriedAt || previousRow.runningTasks[0]?.lastSeenAt || previousRow.queuedTasks[0]?.lastSeenAt || queriedAt,
+          queueIsStale: true,
+          queueError,
         };
       }
 
@@ -981,7 +480,7 @@ export default function App() {
           robotName: job.robotName,
           startedAt,
           updatedAt,
-          lastSeenAt: Date.now(),
+          lastSeenAt: queriedAt,
         };
 
         const targetList = state === 'running' ? row.runningTasks : row.queuedTasks;
@@ -1033,6 +532,8 @@ export default function App() {
       return {
         ...row,
         runningTasks: stillFreshRunningTasks,
+        queueIsStale: true,
+        queueError: '队列接口本轮未返回运行任务，短暂保留上一轮状态',
       };
     });
   };
@@ -1064,7 +565,7 @@ export default function App() {
 
     const taskRecords = await fetchAllTaskRecords(accessToken, scheduleUuid);
     const completedDurations = taskRecords
-      .map((record) => getTaskDurationMs(record))
+      .map((record) => getTaskDurationMs(record, MAX_REASONABLE_HISTORY_DURATION_MS))
       .filter((duration): duration is number => typeof duration === 'number');
 
     const averageDurationMins = completedDurations.length
@@ -1118,183 +619,9 @@ export default function App() {
   };
 
   const generateTasks = (items: ScheduleDetail[]) => {
-    const nextTasks: ExtendedScheduleTask[] = [];
-    const skipped: SkippedScheduleInfo[] = [];
-    const now = new Date();
-    const horizon = addDays(now, FUTURE_DAYS);
-
-    items.forEach((item) => {
-      const cronInterface = parseCronInterface(item.cronInterface);
-      const cronExpression = getCronExpression(cronInterface);
-      const nextTime = cronInterface?.nextTime || item.nextTime || item.nextRunTime;
-
-      const robotNames = uniqueStrings([
-        ...(item.robotList?.map((robot) => robot.robotName) || []),
-        ...(item.derivedRobotNames || []),
-        (item as any).robotName,
-        (item as any).appName,
-      ]);
-      const configuredAccountNames = getScheduleConfiguredAccountNames(item);
-      const groupNames = getScheduleGroupNames(item);
-      const observedClientNames = uniqueStrings([
-        ...(item.derivedClientNames || []),
-        (item as any).clientName,
-        (item as any).creatorName,
-      ]);
-      const clientNames = uniqueStrings([
-        ...configuredAccountNames,
-        ...observedClientNames,
-      ]);
-      const { executionScopeType, executionScopeLabel } = describeExecutionScope(
-        groupNames,
-        configuredAccountNames,
-        clientNames,
-      );
-      const taskGroupKey = item.scheduleUuid || `schedule-${normalizeLookupKey(item.scheduleName)}`;
-
-      const robotName = robotNames[0] || '未知应用';
-      const clientName = clientNames[0] || (groupNames.length > 0 ? '从机器人组分配' : '未指定账号');
-
-      item.historicalRuns?.forEach((run) => {
-        const status: ExtendedScheduleTask['status'] = isFinishedStatus(run.status)
-          ? 'completed'
-          : isRunningStatus(run.status)
-            ? 'running'
-            : 'failed';
-        const actualClientNames = uniqueStrings(run.clientNames);
-        const historicalClientNames = actualClientNames.length > 0 ? actualClientNames : clientNames;
-
-        nextTasks.push({
-          id: `hist-${item.scheduleUuid}-${run.id}`,
-          name: item.scheduleName || 'Unnamed schedule',
-          startDate: run.start,
-          endDate: run.end,
-          status,
-          robotName,
-          robotNames: uniqueStrings([...robotNames, ...run.robotNames]),
-          clientName: historicalClientNames[0] || clientName,
-          clientNames: historicalClientNames,
-          actualClientNames,
-          configuredClientNames: configuredAccountNames,
-          groupNames,
-          executionScopeType,
-          executionScopeLabel,
-          taskGroupKey,
-          isHistorical: true,
-          scheduleUuid: item.scheduleUuid,
-          cronExpr: null,
-        });
-      });
-
-      if (!cronExpression) {
-        if (nextTime) {
-          const start = parseDateValue(nextTime);
-          if (start && start >= now) {
-            nextTasks.push({
-              id: `${item.scheduleUuid}-next`,
-              name: item.scheduleName || 'Unnamed schedule',
-              startDate: start,
-              endDate: new Date(start.getTime() + (item.averageDurationMins || 1) * 60000),
-              status: 'pending',
-              robotName,
-              robotNames,
-              clientName,
-              clientNames,
-              configuredClientNames: configuredAccountNames,
-              groupNames,
-              executionScopeType,
-              executionScopeLabel,
-              taskGroupKey,
-              scheduleUuid: item.scheduleUuid,
-              cronExpr: null,
-            });
-          } else {
-            skipped.push({
-              scheduleUuid: item.scheduleUuid,
-              scheduleName: item.scheduleName || 'Unnamed schedule',
-              reason: 'next_time_in_past',
-              nextTime,
-            });
-          }
-        } else {
-          skipped.push({
-            scheduleUuid: item.scheduleUuid,
-            scheduleName: item.scheduleName || 'Unnamed schedule',
-            reason: 'no_schedule_rule',
-            nextTime: nextTime || null,
-          });
-        }
-        return;
-      }
-
-      try {
-        const iterator = CronExpressionParser.parse(cronExpression, { currentDate: now });
-        let count = 0;
-
-        while (count < 1000) {
-          const start = iterator.next().toDate();
-          if (start > horizon) break;
-
-          nextTasks.push({
-            id: `${item.scheduleUuid}-${count}`,
-            name: item.scheduleName || 'Unnamed schedule',
-            startDate: start,
-            endDate: new Date(start.getTime() + (item.averageDurationMins || 1) * 60000),
-            status: 'pending',
-            robotName,
-            robotNames,
-            clientName,
-            clientNames,
-            configuredClientNames: configuredAccountNames,
-            groupNames,
-            executionScopeType,
-            executionScopeLabel,
-            taskGroupKey,
-            scheduleUuid: item.scheduleUuid,
-            cronExpr: cronExpression,
-          });
-
-          count += 1;
-        }
-        if (count === 0) {
-          const fallbackStart = parseDateValue(nextTime);
-          if (fallbackStart && fallbackStart >= now) {
-            nextTasks.push({
-              id: `${item.scheduleUuid}-next-fallback`,
-              name: item.scheduleName || 'Unnamed schedule',
-              startDate: fallbackStart,
-              endDate: new Date(fallbackStart.getTime() + (item.averageDurationMins || 1) * 60000),
-              status: 'pending',
-              robotName,
-              robotNames,
-              clientName,
-              clientNames,
-              configuredClientNames: configuredAccountNames,
-              groupNames,
-              executionScopeType,
-              executionScopeLabel,
-              taskGroupKey,
-              scheduleUuid: item.scheduleUuid,
-              cronExpr: cronExpression,
-            });
-          } else {
-            skipped.push({
-              scheduleUuid: item.scheduleUuid,
-              scheduleName: item.scheduleName || 'Unnamed schedule',
-              reason: 'no_future_occurrence_within_horizon',
-              cronExpression,
-              nextTime: nextTime || null,
-            });
-          }
-        }
-      } catch (err) {
-        console.warn(`解析 cron 失败: ${item.scheduleName}`, err);
-      }
-    });
-
-    nextTasks.sort((a, b) => a.startDate.getTime() - b.startDate.getTime());
-    setTasks(nextTasks);
-    setSkippedSchedules(skipped);
+    const result = generateScheduleTasks(items, { futureDays: FUTURE_DAYS });
+    setTasks(result.tasks);
+    setSkippedSchedules(result.skipped);
   };
 
   const syncDashboardSnapshot = async (accessToken: string) => {
@@ -1507,7 +834,14 @@ export default function App() {
 
       setToken(accessToken);
       localStorage.setItem('yingdao_ak_id', accessKeyId);
-      localStorage.setItem('yingdao_ak_secret', accessKeySecret);
+      localStorage.setItem('yingdao_remember_secret', rememberSecret ? 'true' : 'false');
+      if (rememberSecret) {
+        localStorage.setItem('yingdao_ak_secret', accessKeySecret);
+        sessionStorage.removeItem('yingdao_ak_secret');
+      } else {
+        localStorage.removeItem('yingdao_ak_secret');
+        sessionStorage.setItem('yingdao_ak_secret', accessKeySecret);
+      }
 
       await refreshDashboard(accessToken);
     } catch (err: any) {
@@ -1878,12 +1212,38 @@ export default function App() {
     setDashboardPage('gantt');
   };
 
+  const openGanttForTaskDate = (task: ExtendedScheduleTask) => {
+    setViewMode('Day');
+    setCurrentDate(task.startDate);
+    setSearchTerm(groupBy === 'account'
+      ? task.clientName || task.clientNames?.[0] || task.name
+      : task.name);
+    setDashboardPage('gantt');
+  };
+
+  const ganttStatusCounts = useMemo(() => ({
+    all: timelineTasks.length,
+    running: timelineTasks.filter((task) => task.status === 'running').length,
+    pending: timelineTasks.filter((task) => task.status === 'pending').length,
+    historical: timelineTasks.filter((task) => task.isHistorical).length,
+    future: timelineTasks.filter((task) => !task.isHistorical && !task.isRealtime).length,
+  }), [timelineTasks]);
+
   const filteredTasks = useMemo(() => {
-    if (!searchTerm.trim()) return timelineTasks;
+    const statusFilteredTasks = ganttStatusFilter === 'all'
+      ? timelineTasks
+      : timelineTasks.filter((task) => {
+        if (ganttStatusFilter === 'running') return task.status === 'running';
+        if (ganttStatusFilter === 'pending') return task.status === 'pending';
+        if (ganttStatusFilter === 'historical') return task.isHistorical;
+        return !task.isHistorical && !task.isRealtime;
+      });
+
+    if (!searchTerm.trim()) return statusFilteredTasks;
     const keyword = searchTerm.trim().toLowerCase();
 
     if (groupBy === 'account') {
-      return timelineTasks.filter((task) =>
+      return statusFilteredTasks.filter((task) =>
         task.clientNames?.some((name) => matchesAccountKeyword(name, keyword))
         || matchesAccountKeyword(task.clientName, keyword)
         || task.groupNames?.some((name) => matchesAccountKeyword(name, keyword))
@@ -1892,7 +1252,7 @@ export default function App() {
       );
     }
 
-    return timelineTasks.filter((task) =>
+    return statusFilteredTasks.filter((task) =>
       task.name.toLowerCase().includes(keyword)
       || task.id.toLowerCase().includes(keyword)
       || task.robotNames?.some((name) => name.toLowerCase().includes(keyword))
@@ -1900,7 +1260,7 @@ export default function App() {
       || task.groupNames?.some((name) => name.toLowerCase().includes(keyword))
       || task.executionScopeLabel?.toLowerCase().includes(keyword),
     );
-  }, [groupBy, searchTerm, timelineTasks]);
+  }, [ganttStatusFilter, groupBy, searchTerm, timelineTasks]);
 
   const realtimeQueueStatusScopeRows = useMemo(() => {
     const keyword = queueSearchTerm.trim().toLowerCase();
@@ -1981,6 +1341,66 @@ export default function App() {
     );
   }, [realtimeQueueRows]);
 
+  const staleQueueCount = useMemo(
+    () => realtimeQueueRows.filter((row) => row.queueIsStale).length,
+    [realtimeQueueRows],
+  );
+
+  const operationalAlerts = useMemo(() => {
+    const alerts: Array<{ id: string; title: string; detail: string; tone: 'amber' | 'red' | 'blue' }> = [];
+
+    realtimeQueueRows.forEach((row) => {
+      const status = (row.robotStatus || '').toLowerCase();
+      if (row.queueIsStale) {
+        alerts.push({
+          id: `stale-${row.accountKey}`,
+          title: `${row.accountName} 队列数据可能滞后`,
+          detail: `${row.queueError || '沿用上一轮队列数据'}，上次有效数据 ${formatElapsed(clockNow, row.queueQueriedAt)}`,
+          tone: 'amber',
+        });
+      }
+      if (status === 'offline' && row.queuedTasks.length > 0) {
+        alerts.push({
+          id: `offline-queued-${row.accountKey}`,
+          title: `${row.accountName} 离线但仍有排队任务`,
+          detail: `当前排队 ${row.queuedTasks.length} 个，建议确认该账号是否仍可被调度。`,
+          tone: 'red',
+        });
+      }
+      if (status === 'running' && row.runningTasks.length === 0) {
+        alerts.push({
+          id: `running-empty-${row.accountKey}`,
+          title: `${row.accountName} 机器人运行中但未返回任务`,
+          detail: '可能是队列接口延迟、影刀内部状态尚未同步，或当前运行不属于可查询任务。',
+          tone: 'blue',
+        });
+      }
+    });
+
+    const runningByTask = new Map<string, RealtimeQueueRow[]>();
+    realtimeQueueRows.forEach((row) => {
+      row.runningTasks.forEach((task) => {
+        const key = normalizeLookupKey(task.taskName || task.scheduleName);
+        if (!key) return;
+        const list = runningByTask.get(key) || [];
+        list.push(row);
+        runningByTask.set(key, list);
+      });
+    });
+
+    runningByTask.forEach((rows, taskKey) => {
+      if (rows.length <= 1) return;
+      alerts.push({
+        id: `multi-running-${taskKey}`,
+        title: '同名任务正在多个账号执行',
+        detail: `${rows.slice(0, 3).map((row) => row.accountName).join('、')}${rows.length > 3 ? ` 等 ${rows.length} 个账号` : ''} 同时运行，若该任务应单账号串行，需要确认配置。`,
+        tone: 'amber',
+      });
+    });
+
+    return alerts.slice(0, 8);
+  }, [clockNow, realtimeQueueRows]);
+
   const realtimeOverviewStats = useMemo(() => ({
     totalRobots: robotClients.length,
     robotRunning: robotStatusSummary.running,
@@ -2018,6 +1438,11 @@ export default function App() {
             <span className="rounded-full bg-amber-50 px-2 py-0.5 font-medium text-amber-700 dark:bg-amber-950/50 dark:text-amber-200">
               排队 {realtimeQueueStats.queued}
             </span>
+            {staleQueueCount > 0 && (
+              <span className="rounded-full bg-orange-50 px-2 py-0.5 font-medium text-orange-700 dark:bg-orange-950/50 dark:text-orange-200">
+                延迟 {staleQueueCount}
+              </span>
+            )}
           </div>
         </div>
       </CardHeader>
@@ -2072,12 +1497,8 @@ export default function App() {
                 const rowScopeNames = uniqueStrings(
                   scopedTasks.flatMap((task) => getRealtimeTaskScope(task)?.groupNames || []),
                 );
-                const getQueueTaskIdentity = (task: RealtimeQueueTask) => {
-                  const scopeNames = getRealtimeTaskScope(task)?.groupNames || [];
-                  return `${normalizeLookupKey(task.taskName)}|${scopeNames.join('|')}`;
-                };
                 const visibleQueuedTasks = row.queuedTasks.filter((task, index, list) =>
-                  list.findIndex((item) => getQueueTaskIdentity(item) === getQueueTaskIdentity(task)) === index,
+                  list.findIndex((item) => getQueueTaskIdentity(item, getRealtimeTaskScope(item)?.groupNames || []) === getQueueTaskIdentity(task, getRealtimeTaskScope(task)?.groupNames || [])) === index,
                 );
                 const duplicateQueuedCount = row.queuedTasks.length - visibleQueuedTasks.length;
 
@@ -2116,6 +1537,11 @@ export default function App() {
                         {rowScopeNames.length > 0 && (
                           <div className="mt-1 truncate text-[11px] font-medium text-purple-700 dark:text-purple-200">
                             机器人组：{formatNamesForLabel(rowScopeNames, '未返回分组')}
+                          </div>
+                        )}
+                        {row.queueIsStale && (
+                          <div className="mt-1 rounded bg-orange-50 px-2 py-1 text-[11px] text-orange-700 dark:bg-orange-950/40 dark:text-orange-200">
+                            队列数据可能滞后，上次有效数据 {formatElapsed(clockNow, row.queueQueriedAt)}
                           </div>
                         )}
                       </div>
@@ -2222,10 +1648,62 @@ export default function App() {
               {format(overviewDays[0], 'MM-dd', { locale: zhCN })} - {format(overviewDays[6], 'MM-dd', { locale: zhCN })}
             </div>
           </div>
+
+          <div className="flex flex-wrap gap-1.5">
+            {([
+              { value: 'all', label: '全部', count: ganttStatusCounts.all },
+              { value: 'running', label: '执行中', count: ganttStatusCounts.running },
+              { value: 'pending', label: '计划/排队', count: ganttStatusCounts.pending },
+              { value: 'historical', label: '历史', count: ganttStatusCounts.historical },
+              { value: 'future', label: '未来', count: ganttStatusCounts.future },
+            ] as const).map((item) => (
+              <button
+                key={item.value}
+                type="button"
+                onClick={() => setGanttStatusFilter(item.value)}
+                disabled={item.value !== 'all' && item.count === 0}
+                className={cn(
+                  'rounded-full border px-2.5 py-1 text-[11px] transition',
+                  ganttStatusFilter === item.value
+                    ? 'border-gray-900 bg-gray-900 text-white dark:border-[#58a6ff] dark:bg-[#1f6feb26] dark:text-[#79c0ff]'
+                    : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:bg-gray-50 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-[#8b949e] dark:hover:border-[#58a6ff] dark:hover:text-[#c9d1d9]',
+                  item.value !== 'all' && item.count === 0 && 'cursor-not-allowed opacity-45',
+                )}
+              >
+                {item.label}
+                <span className="ml-1 opacity-70">{item.count}</span>
+              </button>
+            ))}
+          </div>
         </div>
       </CardHeader>
 
       <CardContent className="p-0">
+        {operationalAlerts.length > 0 && (
+          <div className="border-b bg-white p-4 dark:border-[#30363d] dark:bg-[#161b22]">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <div className="text-sm font-semibold text-gray-900 dark:text-[#f0f6fc]">需要优先确认</div>
+              <div className="text-xs text-gray-500 dark:text-[#8b949e]">{operationalAlerts.length} 条状态提示</div>
+            </div>
+            <div className="grid gap-2 lg:grid-cols-2">
+              {operationalAlerts.map((alert) => (
+                <div
+                  key={alert.id}
+                  className={cn(
+                    'rounded-md border px-3 py-2 text-xs',
+                    alert.tone === 'red' && 'border-red-200 bg-red-50 text-red-900 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-100',
+                    alert.tone === 'amber' && 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100',
+                    alert.tone === 'blue' && 'border-blue-200 bg-blue-50 text-blue-900 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-100',
+                  )}
+                >
+                  <div className="font-semibold">{alert.title}</div>
+                  <div className="mt-1 opacity-80">{alert.detail}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="grid gap-3 border-b p-4 dark:border-[#30363d] md:grid-cols-4">
           <div className="rounded-md bg-slate-50 px-3 py-2 dark:bg-slate-800">
             <div className="text-xs text-gray-500 dark:text-slate-400">范围数量</div>
@@ -2442,6 +1920,7 @@ export default function App() {
               robotClients={robotClients}
               robotGroups={robotGroups}
               searchTerm={searchTerm}
+              onOpenTaskDate={openGanttForTaskDate}
             />
           </div>
         ) : (
@@ -2510,6 +1989,17 @@ export default function App() {
                   required
                 />
               </div>
+              <label className="flex items-start gap-2 rounded-md border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                <input
+                  type="checkbox"
+                  checked={rememberSecret}
+                  onChange={(event) => setRememberSecret(event.target.checked)}
+                  className="mt-0.5"
+                />
+                <span>
+                  记住密钥到本机浏览器。未勾选时，Secret 只保留在当前会话中，关闭浏览器后需要重新输入。
+                </span>
+              </label>
 
               {error && (
                 <div className="p-3 text-sm text-red-500 bg-red-50 rounded-md border border-red-100">
@@ -2573,6 +2063,7 @@ export default function App() {
                 setRobotGroups([]);
                 setRealtimeQueueRows([]);
                 setScheduleReadSummary({ total: 0, disabled: 0, unschedulable: 0, schedulable: 0 });
+                sessionStorage.removeItem('yingdao_ak_secret');
               }}
               className="h-8 px-2"
             >

@@ -1,20 +1,41 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# 影刀任务计划看板
 
-# Run and deploy your AI Studio app
+用于查看影刀常规定时任务、实时执行状态、排队任务和一周负载总览的轻量看板。
 
-This contains everything you need to run your app locally.
+## 功能
 
-View your app in AI Studio: https://ai.studio/apps/354a2c15-609e-4c21-bdf0-afd2089e0c12
+- 读取影刀任务、机器人账号、机器人组和队列接口。
+- 根据定时规则和历史运行时长生成未来任务甘特图。
+- 展示实时运行、排队、离线、空闲等机器人状态。
+- 总览页突出异常状态，例如队列数据滞后、离线仍有排队任务、同名任务多账号执行。
+- 甘特图支持按任务或账号/分组查看，并支持日、周、月、年视角。
 
-## Run Locally
+## 本地运行
 
-**Prerequisites:**  Node.js
+```bash
+npm install
+npm run dev
+```
 
+默认服务地址为 `http://localhost:3000`。
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+## 验证
+
+```bash
+npm run lint
+npm run build
+```
+
+如果需要运行单元测试：
+
+```bash
+npm run test
+```
+
+## 部署
+
+项目包含 `netlify.toml` 和 `netlify/functions/api.ts`，Netlify 会将 `/api/*` 转发到 serverless function，再由服务端代理访问影刀接口。
+
+## 密钥存储
+
+登录页默认只把 Access Key Secret 保存在当前浏览器会话中。勾选“记住密钥到本机浏览器”后，才会将 Secret 写入本机浏览器的 `localStorage`。

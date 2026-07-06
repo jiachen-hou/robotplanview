@@ -1,29 +1,10 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import {
-  addDays,
-  addYears,
-  eachDayOfInterval,
-  endOfMonth,
-  format,
-  startOfMonth,
-  startOfWeek,
-  startOfYear,
-} from 'date-fns';
-import { zhCN } from 'date-fns/locale';
+import { format } from 'date-fns';
 import { AppWindow, Bot, ChevronLeft, ChevronRight, Users, X } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import { ExtendedScheduleTask } from '@/src/App';
-
-export type ViewMode = 'Day' | 'Week' | 'Month' | 'Year';
-
-export interface ScheduleTask {
-  id: string;
-  name: string;
-  startDate: Date;
-  endDate: Date;
-  status: 'pending' | 'running' | 'completed' | 'failed';
-}
+import { dateToPercent, getTimelineRange } from '@/src/domain/timelineRange';
+import type { ExtendedScheduleTask, RobotClient, RobotGroup, ViewMode } from '@/src/types/dashboard';
 
 type TaskGroup = {
   id: string;
@@ -54,9 +35,10 @@ interface GanttChartProps {
   currentDate: Date;
   currentTime?: Date;
   groupBy?: 'task' | 'account';
-  robotClients?: any[];
-  robotGroups?: any[];
+  robotClients?: RobotClient[];
+  robotGroups?: RobotGroup[];
   searchTerm?: string;
+  onOpenTaskDate?: (task: ExtendedScheduleTask) => void;
 }
 
 function matchesRobotGroupKeyword(value: string | undefined, keyword: string): boolean {
@@ -164,6 +146,7 @@ export function GanttChart({
   robotClients = [],
   robotGroups = [],
   searchTerm = '',
+  onOpenTaskDate,
 }: GanttChartProps) {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
@@ -200,54 +183,10 @@ export function GanttChart({
     return () => window.removeEventListener('click', handleWindowClick);
   }, []);
 
-  const { startDate, endDate, headers, columns, totalMinutes } = useMemo(() => {
-    let start: Date;
-    let end: Date;
-    let nextColumns: Date[] = [];
-
-    if (viewMode === 'Day') {
-      start = new Date(currentDate);
-      start.setHours(0, 0, 0, 0);
-      end = addDays(start, 1);
-      for (let hour = 0; hour < 24; hour += 1) {
-        const point = new Date(start);
-        point.setHours(hour);
-        nextColumns.push(point);
-      }
-    } else if (viewMode === 'Week') {
-      start = startOfWeek(currentDate, { weekStartsOn: 1 });
-      end = addDays(start, 7);
-      nextColumns = eachDayOfInterval({ start, end: addDays(end, -1) });
-    } else if (viewMode === 'Month') {
-      start = startOfMonth(currentDate);
-      const monthEnd = endOfMonth(currentDate);
-      end = addDays(monthEnd, 1);
-      nextColumns = eachDayOfInterval({ start, end: monthEnd });
-    } else {
-      start = startOfYear(currentDate);
-      end = addYears(start, 1);
-      for (let month = 0; month < 12; month += 1) {
-        const point = new Date(start);
-        point.setMonth(month);
-        nextColumns.push(point);
-      }
-    }
-
-    const nextHeaders = nextColumns.map((date) => {
-      if (viewMode === 'Day') return { label: format(date, 'H:00'), colSpan: 1 };
-      if (viewMode === 'Week') return { label: format(date, 'M月d日 EEEE', { locale: zhCN }), colSpan: 1 };
-      if (viewMode === 'Month') return { label: format(date, 'd日'), colSpan: 1 };
-      return { label: format(date, 'M月'), colSpan: 1 };
-    });
-
-    return {
-      startDate: start,
-      endDate: end,
-      headers: nextHeaders,
-      columns: nextColumns,
-      totalMinutes: Math.max(1, (end.getTime() - start.getTime()) / 60000),
-    };
-  }, [currentDate, viewMode]);
+  const { startDate, endDate, headers, columns, totalMinutes } = useMemo(
+    () => getTimelineRange(currentDate, viewMode),
+    [currentDate, viewMode],
+  );
 
   const columnWidth = useMemo(() => {
     switch (viewMode) {
@@ -405,7 +344,7 @@ export function GanttChart({
 
   const isNowVisible = now >= startDate && now < endDate;
   const nowLeftPercent = isNowVisible
-    ? ((now.getTime() - startDate.getTime()) / (totalMinutes * 60 * 1000)) * 100
+    ? dateToPercent(now, { startDate, totalMinutes })
     : -1;
 
   useEffect(() => {
@@ -437,10 +376,10 @@ export function GanttChart({
   const getTaskPosition = (task: ExtendedScheduleTask & { lane: number }) => {
     const visibleStart = task.startDate < startDate ? startDate : task.startDate;
     const visibleEnd = task.endDate > endDate ? endDate : task.endDate;
-    const totalMs = Math.max(1, totalMinutes * 60 * 1000);
-    const rawLeftPercent = Math.max(0, ((visibleStart.getTime() - startDate.getTime()) / totalMs) * 100);
-    const rightPercent = Math.min(100, ((visibleEnd.getTime() - startDate.getTime()) / totalMs) * 100);
-    const rawWidthPercent = Math.max(0, ((visibleEnd.getTime() - visibleStart.getTime()) / totalMs) * 100);
+    const range = { startDate, totalMinutes };
+    const rawLeftPercent = Math.max(0, dateToPercent(visibleStart, range));
+    const rightPercent = Math.min(100, dateToPercent(visibleEnd, range));
+    const rawWidthPercent = Math.max(0, rightPercent - rawLeftPercent);
     const rawLeftPx = (rawLeftPercent / 100) * gridMinWidth;
     const rightPx = (rightPercent / 100) * gridMinWidth;
     const rawWidthPx = (rawWidthPercent / 100) * gridMinWidth;
@@ -900,14 +839,23 @@ export function GanttChart({
             {isClusterTooltip && (
               <div className="mt-3 space-y-1.5 border-t border-gray-100 pt-3 dark:border-[#30363d]">
                 {tooltipTasks.slice(0, 8).map((task) => (
-                  <div key={task.id} className="rounded-md bg-gray-50 px-2.5 py-2 dark:bg-[#0d1117]">
+                  <button
+                    key={task.id}
+                    type="button"
+                    className="w-full rounded-md bg-gray-50 px-2.5 py-2 text-left transition hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 dark:bg-[#0d1117] dark:hover:bg-[#1f6feb26]"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onOpenTaskDate?.(task);
+                      setTooltip(null);
+                    }}
+                  >
                     <div className="break-words font-medium text-gray-900 dark:text-[#f0f6fc]">{task.name}</div>
                     <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-gray-500 dark:text-[#8b949e]">
                       <span>{format(task.startDate, 'MM-dd HH:mm')}</span>
                       <span>{getStatusLabel(task.status)}</span>
                       <span>{formatCompactNames(task.clientNames || [task.clientName], '未返回账号')}</span>
                     </div>
-                  </div>
+                  </button>
                 ))}
                 {tooltipTasks.length > 8 && (
                   <div className="text-[11px] text-gray-500 dark:text-[#8b949e]">

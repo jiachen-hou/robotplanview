@@ -117,6 +117,22 @@ function formatElapsed(now: Date, timestamp?: number): string {
   return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟前`;
 }
 
+function matchesTimelineStatus(task: ExtendedScheduleTask, filter: GanttStatusFilter): boolean {
+  if (filter === 'all') return true;
+  if (filter === 'running') return task.status === 'running';
+  if (filter === 'pending') return task.status === 'pending';
+  if (filter === 'historical') return Boolean(task.isHistorical);
+  return !task.isHistorical && !task.isRealtime;
+}
+
+const STATUS_FILTER_OPTIONS: Array<{ value: GanttStatusFilter; label: string }> = [
+  { value: 'all', label: '全部' },
+  { value: 'running', label: '执行中' },
+  { value: 'pending', label: '计划/排队' },
+  { value: 'historical', label: '历史' },
+  { value: 'future', label: '未来' },
+];
+
 export default function App() {
   const [accessKeyId, setAccessKeyId] = useState('');
   const [accessKeySecret, setAccessKeySecret] = useState('');
@@ -152,6 +168,7 @@ export default function App() {
   const [viewMode, setViewMode] = useState<ViewMode>('Week');
   const [groupBy, setGroupBy] = useState<TimelineGroupBy>('task');
   const [ganttStatusFilter, setGanttStatusFilter] = useState<GanttStatusFilter>('all');
+  const [overviewStatusFilter, setOverviewStatusFilter] = useState<GanttStatusFilter>('all');
   const [currentDate, setCurrentDate] = useState(new Date());
   const loadingRef = useRef(false);
   const schedulesRef = useRef<ScheduleDetail[]>([]);
@@ -1123,6 +1140,11 @@ export default function App() {
     return Array.from({ length: 7 }, (_, index) => addDays(weekStart, index));
   }, [currentDate]);
 
+  const overviewTimelineTasks = useMemo(
+    () => timelineTasks.filter((task) => matchesTimelineStatus(task, overviewStatusFilter)),
+    [overviewStatusFilter, timelineTasks],
+  );
+
   const overviewRows = useMemo<OverviewScopeRow[]>(() => {
     const weekStart = overviewDays[0];
     const weekEnd = addDays(weekStart, 7);
@@ -1153,7 +1175,7 @@ export default function App() {
       return rows.get(id)!;
     };
 
-    timelineTasks.forEach((task) => {
+    overviewTimelineTasks.forEach((task) => {
       if (!taskOverlapsRange(task, weekStart, weekEnd)) return;
 
       getTaskOverviewScopes(task).forEach((scope) => {
@@ -1183,7 +1205,7 @@ export default function App() {
       if (right.total !== left.total) return right.total - left.total;
       return left.name.localeCompare(right.name, 'zh-CN');
     });
-  }, [overviewDays, timelineTasks]);
+  }, [overviewDays, overviewTimelineTasks]);
 
   const maxOverviewCellCount = useMemo(
     () => Math.max(1, ...overviewRows.flatMap((row) => row.cells.map((cell) => cell.total))),
@@ -1193,6 +1215,7 @@ export default function App() {
   const openGanttForScope = (scopeName: string, date?: Date) => {
     setSearchTerm(scopeName);
     setGroupBy('account');
+    setGanttStatusFilter('all');
     if (date) {
       setCurrentDate(date);
       setViewMode('Day');
@@ -1207,6 +1230,7 @@ export default function App() {
 
     setSearchTerm(row.accountName);
     setGroupBy('account');
+    setGanttStatusFilter('all');
     setViewMode('Day');
     setCurrentDate(parseDateValue(focusTime) || new Date());
     setDashboardPage('gantt');
@@ -1215,6 +1239,7 @@ export default function App() {
   const openGanttForTaskDate = (task: ExtendedScheduleTask) => {
     setViewMode('Day');
     setCurrentDate(task.startDate);
+    setGanttStatusFilter('all');
     setSearchTerm(groupBy === 'account'
       ? task.clientName || task.clientNames?.[0] || task.name
       : task.name);
@@ -1230,14 +1255,7 @@ export default function App() {
   }), [timelineTasks]);
 
   const filteredTasks = useMemo(() => {
-    const statusFilteredTasks = ganttStatusFilter === 'all'
-      ? timelineTasks
-      : timelineTasks.filter((task) => {
-        if (ganttStatusFilter === 'running') return task.status === 'running';
-        if (ganttStatusFilter === 'pending') return task.status === 'pending';
-        if (ganttStatusFilter === 'historical') return task.isHistorical;
-        return !task.isHistorical && !task.isRealtime;
-      });
+    const statusFilteredTasks = timelineTasks.filter((task) => matchesTimelineStatus(task, ganttStatusFilter));
 
     if (!searchTerm.trim()) return statusFilteredTasks;
     const keyword = searchTerm.trim().toLowerCase();
@@ -1625,14 +1643,17 @@ export default function App() {
   const overviewPanel = (
     <Card className="overflow-hidden border-gray-200 shadow-sm dark:border-[#30363d] dark:bg-[#161b22]">
       <CardHeader className="border-b p-4 dark:border-[#30363d]">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div>
+        <div className="grid gap-4 xl:grid-cols-[minmax(280px,1fr)_auto_auto] xl:items-center">
+          <div className="min-w-0">
             <CardTitle className="text-lg">全局总览</CardTitle>
-            <CardDescription className="mt-1">
-              按机器人组或账号看一周负载，蓝/黄/橙/红表示从低到高的任务密度。
+            <CardDescription className="mt-1 max-w-3xl">
+              按机器人组或账号看一周负载。当前筛选：
+              {STATUS_FILTER_OPTIONS.find((item) => item.value === overviewStatusFilter)?.label}
+              ，颜色从蓝、黄、橙到红表示任务密度逐级升高。
             </CardDescription>
           </div>
-          <div className="flex items-center gap-2">
+
+          <div className="flex flex-wrap items-center gap-2">
             <div className="flex items-center gap-1 rounded-md border bg-white p-1 shadow-sm dark:border-[#30363d] dark:bg-[#0d1117]">
               <Button variant="ghost" size="icon" onClick={() => setCurrentDate((value) => subWeeks(value, 1))} className="h-8 w-8">
                 <ChevronLeft className="h-4 w-4" />
@@ -1649,31 +1670,40 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-1.5">
-            {([
-              { value: 'all', label: '全部', count: ganttStatusCounts.all },
-              { value: 'running', label: '执行中', count: ganttStatusCounts.running },
-              { value: 'pending', label: '计划/排队', count: ganttStatusCounts.pending },
-              { value: 'historical', label: '历史', count: ganttStatusCounts.historical },
-              { value: 'future', label: '未来', count: ganttStatusCounts.future },
-            ] as const).map((item) => (
+          <div className="flex flex-wrap items-center gap-1.5 xl:justify-end">
+            {STATUS_FILTER_OPTIONS.map((option) => {
+              const count = ganttStatusCounts[option.value];
+              return (
               <button
-                key={item.value}
+                key={option.value}
                 type="button"
-                onClick={() => setGanttStatusFilter(item.value)}
-                disabled={item.value !== 'all' && item.count === 0}
+                onClick={() => setOverviewStatusFilter(option.value)}
+                disabled={option.value !== 'all' && count === 0}
                 className={cn(
                   'rounded-full border px-2.5 py-1 text-[11px] transition',
-                  ganttStatusFilter === item.value
+                  overviewStatusFilter === option.value
                     ? 'border-gray-900 bg-gray-900 text-white dark:border-[#58a6ff] dark:bg-[#1f6feb26] dark:text-[#79c0ff]'
                     : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:bg-gray-50 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-[#8b949e] dark:hover:border-[#58a6ff] dark:hover:text-[#c9d1d9]',
-                  item.value !== 'all' && item.count === 0 && 'cursor-not-allowed opacity-45',
+                  option.value !== 'all' && count === 0 && 'cursor-not-allowed opacity-45',
                 )}
               >
-                {item.label}
-                <span className="ml-1 opacity-70">{item.count}</span>
+                {option.label}
+                <span className="ml-1 opacity-70">{count}</span>
               </button>
-            ))}
+              );
+            })}
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 px-2.5 text-xs"
+              onClick={() => {
+                setGanttStatusFilter('all');
+                setSearchTerm('');
+                setDashboardPage('gantt');
+              }}
+            >
+              打开甘特图
+            </Button>
           </div>
         </div>
       </CardHeader>
@@ -1900,6 +1930,51 @@ export default function App() {
               </Tabs>
             </div>
           </div>
+
+          <div className="flex flex-col gap-2 rounded-md bg-gray-50 p-2 dark:bg-[#0d1117] lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="mr-1 text-xs text-gray-500 dark:text-[#8b949e]">显示</span>
+              {STATUS_FILTER_OPTIONS.map((option) => {
+                const count = ganttStatusCounts[option.value];
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => setGanttStatusFilter(option.value)}
+                    disabled={option.value !== 'all' && count === 0}
+                    className={cn(
+                      'rounded-full border px-2.5 py-1 text-[11px] transition',
+                      ganttStatusFilter === option.value
+                        ? 'border-gray-900 bg-gray-900 text-white dark:border-[#58a6ff] dark:bg-[#1f6feb26] dark:text-[#79c0ff]'
+                        : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:bg-gray-50 dark:border-[#30363d] dark:bg-[#161b22] dark:text-[#8b949e] dark:hover:border-[#58a6ff] dark:hover:text-[#c9d1d9]',
+                      option.value !== 'all' && count === 0 && 'cursor-not-allowed opacity-45',
+                    )}
+                  >
+                    {option.label}
+                    <span className="ml-1 opacity-70">{count}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-[#8b949e]">
+              <span>
+                当前显示 {filteredTasks.length} / {timelineTasks.length} 条
+              </span>
+              {(searchTerm || ganttStatusFilter !== 'all') && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => {
+                    setSearchTerm('');
+                    setGanttStatusFilter('all');
+                  }}
+                >
+                  清除筛选
+                </Button>
+              )}
+            </div>
+          </div>
         </div>
       </CardHeader>
 
@@ -2072,9 +2147,20 @@ export default function App() {
           </div>
         </div>
 
-        <div className="rounded-lg border border-gray-200 bg-white p-2 shadow-sm dark:border-[#30363d] dark:bg-[#161b22]">
-          <div className="flex flex-col gap-2 xl:flex-row xl:items-center">
-            <Tabs value={dashboardPage} onValueChange={(value) => setDashboardPage(value as DashboardPage)} className="w-full xl:w-[420px] xl:shrink-0">
+        <div className="rounded-xl border border-gray-200 bg-white p-2 shadow-sm dark:border-[#30363d] dark:bg-[#161b22]">
+          <div className="grid gap-2 xl:grid-cols-[minmax(320px,520px)_1fr] xl:items-center">
+            <Tabs
+              value={dashboardPage}
+              onValueChange={(value) => {
+                const nextPage = value as DashboardPage;
+                if (nextPage === 'gantt') {
+                  setGanttStatusFilter('all');
+                  setSearchTerm('');
+                }
+                setDashboardPage(nextPage);
+              }}
+              className="w-full"
+            >
               <TabsList className="grid h-9 w-full grid-cols-3 rounded-md bg-gray-100 p-0.5 dark:bg-[#0d1117]">
                 <TabsTrigger value="overview" className="h-8 text-xs">总览</TabsTrigger>
                 <TabsTrigger value="realtime" className="h-8 text-xs">实时任务</TabsTrigger>
@@ -2082,7 +2168,7 @@ export default function App() {
               </TabsList>
             </Tabs>
 
-            <div className="grid flex-1 grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-7">
+            <div className="grid grid-cols-2 gap-1.5 md:grid-cols-4 xl:grid-cols-7">
               {[
                 { label: '机器人', value: realtimeOverviewStats.totalRobots, className: 'bg-white dark:bg-[#161b22]' },
                 { label: '运行', value: realtimeOverviewStats.robotRunning, className: 'bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-200' },
@@ -2094,10 +2180,10 @@ export default function App() {
               ].map((item) => (
                 <div
                   key={item.label}
-                  className={cn('min-h-12 rounded-md border border-gray-100 px-3 py-2 dark:border-[#30363d]', item.className)}
+                  className={cn('min-h-10 rounded-md border border-gray-100 px-2.5 py-1.5 dark:border-[#30363d]', item.className)}
                 >
-                  <div className="text-[11px] opacity-70">{item.label}</div>
-                  <div className="mt-0.5 text-lg font-semibold leading-none">{item.value}</div>
+                  <div className="text-[10px] opacity-70">{item.label}</div>
+                  <div className="mt-0.5 text-base font-semibold leading-none">{item.value}</div>
                 </div>
               ))}
             </div>

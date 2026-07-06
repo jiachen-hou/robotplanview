@@ -20,6 +20,29 @@ type TaskGroup = {
   totalLanes: number;
 };
 
+type PositionedTask = {
+  task: ExtendedScheduleTask & { lane: number };
+  leftPx: number;
+  rightPx: number;
+  topPx: number;
+  widthPx: number;
+  rawWidthPx: number;
+  minWidthPx: number;
+};
+
+type GanttItem = {
+  id: string;
+  task: ExtendedScheduleTask & { lane: number };
+  tasks: ExtendedScheduleTask[];
+  isCluster: boolean;
+  leftPx: number;
+  topPx: number;
+  widthPx: number;
+  rawWidthPx: number;
+  title: string;
+  color: string;
+};
+
 type TooltipState = {
   key: string;
   task: ExtendedScheduleTask;
@@ -40,6 +63,10 @@ interface GanttChartProps {
   searchTerm?: string;
   onOpenTaskDate?: (task: ExtendedScheduleTask) => void;
 }
+
+const LEFT_COLUMN_WIDTH = 360;
+const LANE_HEIGHT = 20;
+const ROW_VERTICAL_PADDING = 14;
 
 function matchesRobotGroupKeyword(value: string | undefined, keyword: string): boolean {
   if (!value) return false;
@@ -113,7 +140,7 @@ function formatDuration(startDate: Date, endDate: Date): string {
   return `${Math.max(1, Math.round(diffMs / 1000))} 秒`;
 }
 
-function getTooltipPosition(x: number, y: number, width = 340, height = 300): React.CSSProperties {
+function getTooltipPosition(x: number, y: number, width = 360, height = 320): React.CSSProperties {
   const padding = 12;
   const gap = 14;
   const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1600;
@@ -137,6 +164,43 @@ function getTooltipPosition(x: number, y: number, width = 340, height = 300): Re
   };
 }
 
+function getColumnWidth(viewMode: ViewMode): number {
+  switch (viewMode) {
+    case 'Day':
+      return 64;
+    case 'Week':
+      return 220;
+    case 'Month':
+      return 72;
+    case 'Year':
+      return 150;
+    default:
+      return 100;
+  }
+}
+
+function getTaskColor(task: ExtendedScheduleTask): string {
+  if (task.isRealtime) return '#2563eb';
+  if (task.status === 'failed') return '#dc2626';
+  if (task.status === 'running') return '#60a5fa';
+  if (task.status === 'completed') return '#22c55e';
+
+  let hash = 0;
+  for (let index = 0; index < task.name.length; index += 1) {
+    hash = task.name.charCodeAt(index) + ((hash << 5) - hash);
+  }
+
+  return `hsl(${Math.abs(hash) % 360} 56% 50%)`;
+}
+
+function getClusterColor(clusterTasks: ExtendedScheduleTask[]): string {
+  if (clusterTasks.some((task) => task.isRealtime)) return '#2563eb';
+  if (clusterTasks.some((task) => task.status === 'failed')) return '#dc2626';
+  if (clusterTasks.some((task) => task.status === 'running')) return '#60a5fa';
+  if (clusterTasks.every((task) => task.status === 'completed')) return '#22c55e';
+  return getTaskColor(clusterTasks[0]);
+}
+
 export function GanttChart({
   tasks,
   viewMode,
@@ -157,9 +221,23 @@ export function GanttChart({
   const autoScrollKeyRef = useRef('');
   const now = currentTime || new Date();
 
+  const { startDate, endDate, headers, columns, totalMinutes } = useMemo(
+    () => getTimelineRange(currentDate, viewMode),
+    [currentDate, viewMode],
+  );
+
+  const totalColumns = columns.length;
+  const columnWidth = getColumnWidth(viewMode);
+  const gridWidth = totalColumns * columnWidth;
+  const minVisibleTaskWidth = viewMode === 'Year' ? 4 : viewMode === 'Month' ? 6 : 10;
+  const isNowVisible = now >= startDate && now < endDate;
+  const nowLeftPx = isNowVisible
+    ? (dateToPercent(now, { startDate, totalMinutes }) / 100) * gridWidth
+    : -1;
+
   useEffect(() => {
     setCurrentPage(1);
-  }, [groupBy, searchTerm, viewMode]);
+  }, [groupBy, searchTerm, viewMode, tasks.length]);
 
   useEffect(() => {
     setTooltip((current) => {
@@ -182,30 +260,6 @@ export function GanttChart({
     window.addEventListener('click', handleWindowClick);
     return () => window.removeEventListener('click', handleWindowClick);
   }, []);
-
-  const { startDate, endDate, headers, columns, totalMinutes } = useMemo(
-    () => getTimelineRange(currentDate, viewMode),
-    [currentDate, viewMode],
-  );
-
-  const columnWidth = useMemo(() => {
-    switch (viewMode) {
-      case 'Day':
-        return 48;
-      case 'Week':
-        return 240;
-      case 'Month':
-        return 56;
-      case 'Year':
-        return 150;
-      default:
-        return 100;
-    }
-  }, [viewMode]);
-
-  const totalColumns = columns.length;
-  const gridMinWidth = totalColumns * columnWidth;
-  const minVisibleTaskWidth = viewMode === 'Year' ? 2 : viewMode === 'Month' ? 1 : 0.75;
 
   const groupedTasks = useMemo(() => {
     const createGroup = (
@@ -257,6 +311,19 @@ export function GanttChart({
         robotName: '-',
         clientName: key,
         isGroup: false,
+      });
+    });
+
+    robotGroups.forEach((group) => {
+      const name = group.name;
+      if (!name) return;
+      const rowKey = getRowGroupKey(name, true);
+      createGroup(groups, rowKey, {
+        id: rowKey,
+        name,
+        robotName: '-',
+        clientName: name,
+        isGroup: true,
       });
     });
 
@@ -316,7 +383,7 @@ export function GanttChart({
         executions,
         totalLanes: Math.max(1, lanes.length),
       };
-    }).sort((left, right) => {
+    }).filter((group) => group.executions.length > 0).sort((left, right) => {
       const leftRealtime = left.executions.some((task) => task.isRealtime);
       const rightRealtime = right.executions.some((task) => task.isRealtime);
       if (leftRealtime !== rightRealtime) return rightRealtime ? 1 : -1;
@@ -330,22 +397,16 @@ export function GanttChart({
     [endDate, groupedTasks, startDate],
   );
 
+  const totalPages = Math.max(1, Math.ceil(groupedTasksWithLanes.length / pageSize));
   const paginatedGroups = useMemo(() => {
     if (groupBy !== 'task') return groupedTasksWithLanes;
     const start = (currentPage - 1) * pageSize;
     return groupedTasksWithLanes.slice(start, start + pageSize);
   }, [currentPage, groupBy, groupedTasksWithLanes, pageSize]);
 
-  const totalPages = Math.max(1, Math.ceil(groupedTasksWithLanes.length / pageSize));
-
   useEffect(() => {
     setCurrentPage((value) => Math.min(Math.max(1, value), totalPages));
   }, [totalPages]);
-
-  const isNowVisible = now >= startDate && now < endDate;
-  const nowLeftPercent = isNowVisible
-    ? dateToPercent(now, { startDate, totalMinutes })
-    : -1;
 
   useEffect(() => {
     const container = scrollContainerRef.current;
@@ -355,67 +416,37 @@ export function GanttChart({
     if (autoScrollKeyRef.current === autoScrollKey) return;
     autoScrollKeyRef.current = autoScrollKey;
 
-    const nowLeftPx = (nowLeftPercent / 100) * gridMinWidth;
     container.scrollLeft = Math.max(0, nowLeftPx - container.clientWidth * 0.45);
-  }, [endDate, gridMinWidth, groupBy, isNowVisible, nowLeftPercent, startDate, viewMode]);
+  }, [endDate, groupBy, isNowVisible, nowLeftPx, startDate, viewMode]);
 
-  const getTaskColor = (task: ExtendedScheduleTask) => {
-    if (task.isRealtime) return '#1f6feb';
-    if (task.status === 'failed') return '#f85149';
-    if (task.status === 'running') return '#58a6ff';
-    if (task.status === 'completed') return '#3fb950';
-
-    let hash = 0;
-    for (let index = 0; index < task.name.length; index += 1) {
-      hash = task.name.charCodeAt(index) + ((hash << 5) - hash);
-    }
-
-    return `hsl(${Math.abs(hash) % 360} 58% 52%)`;
-  };
-
-  const getTaskPosition = (task: ExtendedScheduleTask & { lane: number }) => {
+  const getTaskPosition = (task: ExtendedScheduleTask & { lane: number }): PositionedTask => {
     const visibleStart = task.startDate < startDate ? startDate : task.startDate;
     const visibleEnd = task.endDate > endDate ? endDate : task.endDate;
     const range = { startDate, totalMinutes };
-    const rawLeftPercent = Math.max(0, dateToPercent(visibleStart, range));
+    const leftPercent = Math.max(0, dateToPercent(visibleStart, range));
     const rightPercent = Math.min(100, dateToPercent(visibleEnd, range));
-    const rawWidthPercent = Math.max(0, rightPercent - rawLeftPercent);
-    const rawLeftPx = (rawLeftPercent / 100) * gridMinWidth;
-    const rightPx = (rightPercent / 100) * gridMinWidth;
-    const rawWidthPx = (rawWidthPercent / 100) * gridMinWidth;
-    const realtimeMinWidth = task.isRealtime ? 8 : minVisibleTaskWidth;
+    const leftPx = (leftPercent / 100) * gridWidth;
+    const rightPx = (rightPercent / 100) * gridWidth;
+    const rawWidthPx = Math.max(0, rightPx - leftPx);
     const widthPx = Math.min(
-      Math.max(realtimeMinWidth, rawWidthPx),
-      Math.max(realtimeMinWidth, gridMinWidth - rawLeftPx),
+      Math.max(task.isRealtime ? 12 : minVisibleTaskWidth, rawWidthPx),
+      Math.max(task.isRealtime ? 12 : minVisibleTaskWidth, gridWidth - leftPx),
     );
-    const leftPx = task.isRealtime ? Math.max(0, rightPx - widthPx) : rawLeftPx;
 
     return {
-      leftPercent: task.isRealtime ? Math.max(0, rightPercent - rawWidthPercent) : rawLeftPercent,
-      leftPx,
-      minWidthPx: realtimeMinWidth,
-      rawWidthPx,
-      rightPercent,
-      topPx: 4 + task.lane * 18,
-      widthPercent: rawWidthPercent,
+      task,
+      leftPx: task.isRealtime ? Math.max(0, rightPx - widthPx) : leftPx,
+      rightPx,
+      topPx: ROW_VERTICAL_PADDING / 2 + task.lane * LANE_HEIGHT,
       widthPx,
+      rawWidthPx,
+      minWidthPx: task.isRealtime ? 12 : minVisibleTaskWidth,
     };
   };
 
-  const getClusterColor = (clusterTasks: Array<ExtendedScheduleTask & { lane: number }>) => {
-    if (clusterTasks.some((task) => task.isRealtime)) return '#1f6feb';
-    if (clusterTasks.some((task) => task.status === 'failed')) return '#f85149';
-    if (clusterTasks.some((task) => task.status === 'running')) return '#58a6ff';
-    if (clusterTasks.every((task) => task.status === 'completed')) return '#3fb950';
-    return getTaskColor(clusterTasks[0]);
-  };
-
-  const buildGanttItems = (executions: Array<ExtendedScheduleTask & { lane: number }>) => {
+  const buildGanttItems = (executions: Array<ExtendedScheduleTask & { lane: number }>): GanttItem[] => {
     const positioned = executions
-      .map((task) => ({
-        task,
-        ...getTaskPosition(task),
-      }))
+      .map(getTaskPosition)
       .sort((left, right) => {
         if (left.task.lane !== right.task.lane) return left.task.lane - right.task.lane;
         return left.leftPx - right.leftPx;
@@ -427,21 +458,17 @@ export function GanttChart({
         task: item.task,
         tasks: [item.task],
         isCluster: false,
-        leftPercent: item.leftPercent,
         leftPx: item.leftPx,
-        minWidthPx: item.minWidthPx,
-        rawWidthPx: item.rawWidthPx,
-        rightPercent: item.rightPercent,
-        title: item.task.name,
         topPx: item.topPx,
-        widthPercent: item.widthPercent,
         widthPx: item.widthPx,
+        rawWidthPx: item.rawWidthPx,
+        title: item.task.name,
         color: getTaskColor(item.task),
       }));
     }
 
-    const clusterGapPx = viewMode === 'Week' ? 18 : viewMode === 'Month' ? 14 : 10;
-    const clusters: Array<typeof positioned> = [];
+    const clusterGapPx = viewMode === 'Week' ? 20 : viewMode === 'Month' ? 14 : 10;
+    const clusters: PositionedTask[][] = [];
 
     positioned.forEach((item) => {
       const lastCluster = clusters[clusters.length - 1];
@@ -450,9 +477,9 @@ export function GanttChart({
         return;
       }
 
-      const lastItem = lastCluster[lastCluster.length - 1];
       const lastRightPx = Math.max(...lastCluster.map((clusterItem) => clusterItem.leftPx + clusterItem.widthPx));
-      if (lastItem.task.lane === item.task.lane && item.leftPx <= lastRightPx + clusterGapPx) {
+      const lastLane = lastCluster[0].task.lane;
+      if (lastLane === item.task.lane && item.leftPx <= lastRightPx + clusterGapPx) {
         lastCluster.push(item);
         return;
       }
@@ -465,7 +492,7 @@ export function GanttChart({
       const firstItem = clusterItems[0];
       const leftPx = Math.min(...clusterItems.map((item) => item.leftPx));
       const rightPx = Math.max(...clusterItems.map((item) => item.leftPx + item.widthPx));
-      const widthPx = clusterItems.length > 1 ? Math.max(24, rightPx - leftPx) : firstItem.widthPx;
+      const widthPx = clusterItems.length > 1 ? Math.max(28, rightPx - leftPx) : firstItem.widthPx;
       const title = clusterItems.length > 1
         ? `${clusterItems.length} 条任务\n${clusterTasks.slice(0, 5).map((task) => `${format(task.startDate, 'MM-dd HH:mm')} ${task.name}`).join('\n')}`
         : firstItem.task.name;
@@ -477,15 +504,11 @@ export function GanttChart({
         task: firstItem.task,
         tasks: clusterTasks,
         isCluster: clusterItems.length > 1,
-        leftPercent: (leftPx / gridMinWidth) * 100,
         leftPx,
-        minWidthPx: clusterItems.length > 1 ? 24 : firstItem.minWidthPx,
-        rawWidthPx: rightPx - leftPx,
-        rightPercent: (rightPx / gridMinWidth) * 100,
-        title,
         topPx: firstItem.topPx,
-        widthPercent: (widthPx / gridMinWidth) * 100,
         widthPx,
+        rawWidthPx: rightPx - leftPx,
+        title,
         color: clusterItems.length > 1 ? getClusterColor(clusterTasks) : getTaskColor(firstItem.task),
       };
     });
@@ -576,8 +599,8 @@ export function GanttChart({
       setTooltipPosition(getTooltipPosition(
         tooltip.x,
         tooltip.y,
-        rect?.width || 340,
-        rect?.height || 300,
+        rect?.width || 360,
+        rect?.height || 320,
       ));
     };
 
@@ -588,21 +611,24 @@ export function GanttChart({
 
   return (
     <div className="w-full overflow-visible rounded-md border bg-white shadow-sm dark:border-[#30363d] dark:bg-[#161b22]">
-      <div ref={scrollContainerRef} className="overflow-x-auto overflow-y-visible shadow-inner">
+      <div ref={scrollContainerRef} className="overflow-x-auto overflow-y-visible">
         <div className="relative min-w-max">
           <div className="sticky top-0 z-30 flex border-b bg-gray-50 shadow-sm dark:border-[#30363d] dark:bg-[#21262d]">
-            <div className="sticky left-0 z-40 flex w-72 shrink-0 items-center border-r bg-gray-50 p-2 text-sm font-semibold dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#f0f6fc]">
+            <div
+              className="sticky left-0 z-40 flex shrink-0 items-center border-r bg-gray-50 px-3 py-2 text-sm font-semibold dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#f0f6fc]"
+              style={{ width: LEFT_COLUMN_WIDTH }}
+            >
               任务信息
             </div>
-            <div className="relative flex flex-1" style={{ minWidth: `${gridMinWidth}px` }}>
+            <div className="relative flex shrink-0" style={{ width: gridWidth }}>
               {headers.map((header, index) => (
                 <div
                   key={index}
                   className={cn(
-                    'flex items-center whitespace-nowrap border-r p-2 text-[11px] font-medium text-gray-500 dark:border-[#30363d] dark:text-[#8b949e]',
+                    'flex items-center whitespace-nowrap border-r px-2 py-2 text-[11px] font-medium text-gray-500 last:border-r-0 dark:border-[#30363d] dark:text-[#8b949e]',
                     viewMode === 'Day' ? 'justify-start text-left' : 'justify-center text-center',
                   )}
-                  style={{ width: `${(header.colSpan / totalColumns) * 100}%` }}
+                  style={{ width: columnWidth }}
                 >
                   {header.label}
                 </div>
@@ -611,7 +637,7 @@ export function GanttChart({
               {isNowVisible && (
                 <div
                   className="pointer-events-none absolute bottom-0 top-0 z-50 w-px bg-red-500"
-                  style={{ left: `${nowLeftPercent}%` }}
+                  style={{ left: nowLeftPx }}
                 >
                   <div className="absolute top-1 -translate-x-1/2 whitespace-nowrap rounded bg-red-500 px-1.5 py-0.5 text-[10px] text-white shadow-sm">
                     当前
@@ -627,142 +653,147 @@ export function GanttChart({
                 {searchTerm ? '没有找到匹配的账号或任务。' : '该时间段内没有安排任务。'}
               </div>
             ) : (
-              paginatedGroups.map((group) => (
-                <div key={group.id} className="group/row flex border-b hover:bg-gray-50 dark:border-[#30363d] dark:hover:bg-[#21262d]">
-                  <div className="sticky left-0 z-20 flex w-72 shrink-0 flex-col justify-center gap-1 border-r bg-white p-2 px-3 group-hover/row:bg-gray-50 dark:border-[#30363d] dark:bg-[#161b22] dark:group-hover/row:bg-[#21262d]">
-                    {groupBy === 'task' ? (
-                      <>
-                        <div className="truncate text-xs font-medium text-gray-800 dark:text-[#f0f6fc]" title={group.name}>
-                          {group.name}
-                        </div>
-                        <div className="group/robot relative flex truncate text-[10px] text-blue-600 dark:text-[#58a6ff]">
-                          <AppWindow className="mr-1 h-3 w-3 shrink-0" />
-                          <span className="truncate" title={group.robotNames?.join(', ') || group.robotName}>
-                            {group.robotName}
-                          </span>
-                        </div>
-                        <div className="flex truncate text-[10px] text-green-600 dark:text-[#3fb950]" title={group.scopeLabel || group.clientName}>
-                          {group.groupNames?.length ? (
-                            <Users className="mr-1 h-3 w-3 shrink-0" />
-                          ) : (
-                            <Bot className="mr-1 h-3 w-3 shrink-0" />
-                          )}
-                          <span className="truncate">{group.scopeLabel || group.clientName}</span>
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        <div className="flex truncate text-xs font-medium text-gray-800 dark:text-[#f0f6fc]" title={group.name}>
-                          {group.isGroup && !group.isFallbackGroup ? (
-                            <Users className="mr-1 h-3 w-3 shrink-0 text-purple-600 dark:text-[#a371f7]" />
-                          ) : (
-                            <Bot className="mr-1 h-3 w-3 shrink-0 text-green-600 dark:text-[#3fb950]" />
-                          )}
-                          <span className="truncate">{group.name}</span>
-                        </div>
-                        <div className="text-[10px] text-gray-500 dark:text-[#8b949e]">
-                          {group.isGroup ? '机器人组任务' : '任务数量'}: {group.executions.length}
-                          {group.executions.some((task) => task.status === 'running') && (
-                            <span className="ml-1 text-blue-600 dark:text-[#58a6ff]">
-                              执行中 {group.executions.filter((task) => task.status === 'running').length}
-                            </span>
-                          )}
-                        </div>
-                      </>
-                    )}
-                  </div>
+              paginatedGroups.map((group) => {
+                const rowHeight = Math.max(58, group.totalLanes * LANE_HEIGHT + ROW_VERTICAL_PADDING);
+                const items = buildGanttItems(group.executions);
 
-                  <div
-                    className="relative flex-1"
-                    style={{ minHeight: `${Math.max(42, group.totalLanes * 18 + 10)}px`, minWidth: `${gridMinWidth}px` }}
-                  >
-                    <div className="pointer-events-none absolute inset-0 flex">
-                      {columns.map((_, index) => (
-                        <div
-                          key={index}
-                          className="h-full border-r border-gray-100 dark:border-[#30363d]"
-                          style={{ width: `${(1 / totalColumns) * 100}%` }}
-                        />
-                      ))}
+                return (
+                  <div key={group.id} className="group/row flex border-b hover:bg-gray-50 dark:border-[#30363d] dark:hover:bg-[#21262d]">
+                    <div
+                      className="sticky left-0 z-20 flex shrink-0 flex-col justify-center gap-1 border-r bg-white px-3 py-2 group-hover/row:bg-gray-50 dark:border-[#30363d] dark:bg-[#161b22] dark:group-hover/row:bg-[#21262d]"
+                      style={{ width: LEFT_COLUMN_WIDTH, minHeight: rowHeight }}
+                    >
+                      {groupBy === 'task' ? (
+                        <>
+                          <div className="truncate text-sm font-semibold text-gray-900 dark:text-[#f0f6fc]" title={group.name}>
+                            {group.name}
+                          </div>
+                          <div className="flex min-w-0 items-center text-[11px] text-blue-600 dark:text-[#58a6ff]">
+                            <AppWindow className="mr-1 h-3.5 w-3.5 shrink-0" />
+                            <span className="truncate" title={group.robotNames?.join(', ') || group.robotName}>
+                              {group.robotName}
+                            </span>
+                          </div>
+                          <div className="flex min-w-0 items-center text-[11px] text-emerald-600 dark:text-[#3fb950]" title={group.scopeLabel || group.clientName}>
+                            {group.groupNames?.length ? (
+                              <Users className="mr-1 h-3.5 w-3.5 shrink-0" />
+                            ) : (
+                              <Bot className="mr-1 h-3.5 w-3.5 shrink-0" />
+                            )}
+                            <span className="truncate">{group.scopeLabel || group.clientName}</span>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="flex min-w-0 items-center text-sm font-semibold text-gray-900 dark:text-[#f0f6fc]" title={group.name}>
+                            {group.isGroup && !group.isFallbackGroup ? (
+                              <Users className="mr-1.5 h-4 w-4 shrink-0 text-purple-600 dark:text-[#a371f7]" />
+                            ) : (
+                              <Bot className="mr-1.5 h-4 w-4 shrink-0 text-emerald-600 dark:text-[#3fb950]" />
+                            )}
+                            <span className="truncate">{group.name}</span>
+                          </div>
+                          <div className="text-[11px] text-gray-500 dark:text-[#8b949e]">
+                            {group.isGroup ? '机器人组任务' : '任务数量'}：{group.executions.length}
+                            {group.executions.some((task) => task.status === 'running') && (
+                              <span className="ml-2 text-blue-600 dark:text-[#58a6ff]">
+                                执行中 {group.executions.filter((task) => task.status === 'running').length}
+                              </span>
+                            )}
+                          </div>
+                        </>
+                      )}
                     </div>
 
-                    {isNowVisible && (
-                      <div
-                        className="pointer-events-none absolute bottom-0 top-0 z-20 w-px bg-red-500/50"
-                        style={{ left: `${nowLeftPercent}%` }}
-                      />
-                    )}
+                    <div
+                      className="relative shrink-0"
+                      style={{ width: gridWidth, minHeight: rowHeight }}
+                    >
+                      <div className="pointer-events-none absolute inset-0 flex">
+                        {columns.map((_, index) => (
+                          <div
+                            key={index}
+                            className="h-full border-r border-gray-100 last:border-r-0 dark:border-[#30363d]"
+                            style={{ width: columnWidth }}
+                          />
+                        ))}
+                      </div>
 
-                    {buildGanttItems(group.executions).map((item) => {
-                      const task = item.task;
-                      const labelMinWidth = viewMode === 'Day' ? 28 : 40;
-                      const itemStyle: React.CSSProperties = {
-                        top: `${item.topPx}px`,
-                        width: `${item.widthPercent}%`,
-                        minWidth: `${item.minWidthPx}px`,
-                        backgroundColor: item.color,
-                        ...(task.isRealtime && !item.isCluster
-                          ? { right: `${Math.max(0, 100 - item.rightPercent)}%` }
-                          : { left: `${item.leftPercent}%` }),
-                      };
-
-                      return (
+                      {isNowVisible && (
                         <div
-                          key={item.id}
-                          title={item.title}
-                          className={cn(
-                            'absolute flex h-4 cursor-pointer items-center truncate rounded-sm px-1 text-[9px] text-white shadow-sm transition-all hover:z-30 hover:ring-2 hover:ring-blue-400 hover:ring-offset-1 dark:hover:ring-offset-[#0d1117]',
-                            task.isRealtime && 'h-5 rounded-md shadow-md ring-2 ring-blue-300/70 animate-pulse dark:ring-[#58a6ff]/80',
-                            task.status === 'running' && 'animate-pulse ring-1 ring-blue-400',
-                            task.status === 'pending' ? 'border border-dashed border-white/30 opacity-70' : 'opacity-100',
-                            item.isCluster && 'h-5 justify-center rounded-full px-2 text-[10px] font-semibold opacity-100 ring-2 ring-white/80 dark:ring-[#0d1117]',
-                          )}
-                          style={{
-                            ...itemStyle,
-                          }}
-                          onMouseEnter={(event) => openTooltip(task, event, false, item.tasks, item.id)}
-                          onMouseMove={(event) => {
-                            setTooltip((current) => (
-                              current && !current.pinned && current.key === item.id
-                                ? { ...current, x: event.clientX, y: event.clientY }
-                                : current
-                            ));
-                          }}
-                          onMouseLeave={() => {
-                            setTooltip((current) => (current?.pinned ? current : null));
-                          }}
-                          onClick={(event) => {
-                            if (tooltip?.pinned && tooltip.key === item.id) {
-                              event.stopPropagation();
-                              setTooltip(null);
-                              return;
-                            }
-                            openTooltip(task, event, true, item.tasks, item.id);
-                          }}
-                        >
-                          {task.isRealtime && (
-                            <span className="pointer-events-none absolute bottom-0 right-0 top-0 w-1 rounded-full bg-blue-700 shadow-[0_0_0_1px_rgba(255,255,255,0.9)] dark:bg-[#79c0ff]" />
-                          )}
-                          {item.isCluster
-                            ? item.tasks.length
-                            : item.rawWidthPx >= labelMinWidth && format(task.startDate, viewMode === 'Day' ? 'HH:mm' : 'MM-dd HH:mm')}
-                        </div>
-                      );
-                    })}
+                          className="pointer-events-none absolute bottom-0 top-0 z-20 w-px bg-red-500/55"
+                          style={{ left: nowLeftPx }}
+                        />
+                      )}
+
+                      {items.map((item) => {
+                        const task = item.task;
+                        const labelMinWidth = viewMode === 'Day' ? 34 : 46;
+
+                        return (
+                          <div
+                            key={item.id}
+                            title={item.title}
+                            className={cn(
+                              'absolute flex h-4 cursor-pointer items-center truncate rounded-sm px-1 text-[9px] text-white shadow-sm transition-all hover:z-30 hover:ring-2 hover:ring-blue-400 hover:ring-offset-1 dark:hover:ring-offset-[#0d1117]',
+                              task.isRealtime && 'h-5 rounded-md shadow-md ring-2 ring-blue-300/70 dark:ring-[#58a6ff]/80',
+                              task.status === 'running' && 'animate-pulse ring-1 ring-blue-400',
+                              task.status === 'pending' ? 'border border-dashed border-white/50 opacity-75' : 'opacity-100',
+                              item.isCluster && 'h-5 justify-center rounded-full px-2 text-[10px] font-semibold opacity-100 ring-2 ring-white/80 dark:ring-[#0d1117]',
+                            )}
+                            style={{
+                              left: item.leftPx,
+                              top: item.topPx,
+                              width: item.widthPx,
+                              minWidth: item.isCluster ? 28 : item.task.isRealtime ? 12 : minVisibleTaskWidth,
+                              backgroundColor: item.color,
+                            }}
+                            onMouseEnter={(event) => openTooltip(task, event, false, item.tasks, item.id)}
+                            onMouseMove={(event) => {
+                              setTooltip((current) => (
+                                current && !current.pinned && current.key === item.id
+                                  ? { ...current, x: event.clientX, y: event.clientY }
+                                  : current
+                              ));
+                            }}
+                            onMouseLeave={() => {
+                              setTooltip((current) => (current?.pinned ? current : null));
+                            }}
+                            onClick={(event) => {
+                              if (tooltip?.pinned && tooltip.key === item.id) {
+                                event.stopPropagation();
+                                setTooltip(null);
+                                return;
+                              }
+                              openTooltip(task, event, true, item.tasks, item.id);
+                            }}
+                          >
+                            {task.isRealtime && (
+                              <span className="pointer-events-none absolute bottom-0 right-0 top-0 w-1 rounded-full bg-blue-700 shadow-[0_0_0_1px_rgba(255,255,255,0.9)] dark:bg-[#79c0ff]" />
+                            )}
+                            {item.isCluster
+                              ? item.tasks.length
+                              : item.rawWidthPx >= labelMinWidth && format(task.startDate, viewMode === 'Day' ? 'HH:mm' : 'MM-dd HH:mm')}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         </div>
       </div>
 
       {groupBy === 'task' && groupedTasksWithLanes.length > 0 && (
-        <div className="z-30 flex items-center justify-between border-t bg-white px-4 py-2 shadow-[0_-2px_10px_rgba(0,0,0,0.05)] dark:border-[#30363d] dark:bg-[#161b22]">
-          <div className="flex items-center text-xs text-gray-500 dark:text-[#8b949e]">共 {groupedTasksWithLanes.length} 条记录</div>
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500 dark:text-[#8b949e]">每页显示</span>
+        <div className="z-30 flex flex-col gap-2 border-t bg-white px-4 py-2 shadow-[0_-2px_10px_rgba(0,0,0,0.05)] dark:border-[#30363d] dark:bg-[#161b22] sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-xs text-gray-500 dark:text-[#8b949e]">
+            共 {groupedTasksWithLanes.length} 条记录
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="flex items-center gap-2 text-xs text-gray-500 dark:text-[#8b949e]">
+              每页显示
               <select
                 className="rounded border px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-indigo-500 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-[#c9d1d9]"
                 value={pageSize}
@@ -771,16 +802,18 @@ export function GanttChart({
                   setCurrentPage(1);
                 }}
               >
-                {[10, 20, 50, 100, 200].map((size) => (
+                {[20, 50, 100, 200].map((size) => (
                   <option key={size} value={size}>
                     {size}
                   </option>
                 ))}
               </select>
-              <span className="text-xs text-gray-500 dark:text-[#8b949e]">条</span>
-            </div>
+              条
+            </label>
             <div className="flex items-center gap-2">
               <button
+                type="button"
+                aria-label="上一页"
                 className="rounded border p-1 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-[#30363d] dark:hover:bg-[#21262d]"
                 disabled={currentPage === 1}
                 onClick={() => setCurrentPage((value) => Math.max(1, value - 1))}
@@ -791,6 +824,8 @@ export function GanttChart({
                 {currentPage} / {totalPages}
               </span>
               <button
+                type="button"
+                aria-label="下一页"
                 className="rounded border p-1 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-[#30363d] dark:hover:bg-[#21262d]"
                 disabled={currentPage >= totalPages}
                 onClick={() => setCurrentPage((value) => value + 1)}
@@ -806,7 +841,7 @@ export function GanttChart({
         <div
           ref={tooltipRef}
           className={cn(
-            'fixed z-[120] flex max-h-[calc(100vh-24px)] w-[340px] flex-col rounded-xl border border-gray-200 bg-white/95 shadow-2xl backdrop-blur dark:border-[#30363d] dark:bg-[#161b22]/95',
+            'fixed z-[120] flex max-h-[calc(100vh-24px)] w-[360px] flex-col rounded-xl border border-gray-200 bg-white/95 shadow-2xl backdrop-blur dark:border-[#30363d] dark:bg-[#161b22]/95',
             !tooltip.pinned && 'pointer-events-none',
           )}
           style={tooltipPosition}
@@ -822,6 +857,8 @@ export function GanttChart({
               </div>
             </div>
             <button
+              type="button"
+              aria-label="关闭详情"
               className="rounded-md p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-[#21262d] dark:hover:text-[#c9d1d9]"
               onClick={() => setTooltip(null)}
             >
@@ -831,9 +868,9 @@ export function GanttChart({
 
           <div className="min-h-0 space-y-2 overflow-y-auto px-4 py-3 text-xs text-gray-700 dark:text-[#c9d1d9]">
             {tooltipRows.map(([label, value]) => (
-              <div key={label} className="flex justify-between gap-3">
+              <div key={label} className="grid grid-cols-[86px_minmax(0,1fr)] gap-3">
                 <span className="text-gray-500 dark:text-[#8b949e]">{label}</span>
-                <span className="text-right font-medium text-gray-900 dark:text-[#f0f6fc]">{value}</span>
+                <span className="break-words text-right font-medium text-gray-900 dark:text-[#f0f6fc]">{value}</span>
               </div>
             ))}
             {isClusterTooltip && (
@@ -865,7 +902,7 @@ export function GanttChart({
               </div>
             )}
             {!isClusterTooltip && tooltip.task.cronExpr && (
-              <div className="flex justify-between gap-3">
+              <div className="grid grid-cols-[86px_minmax(0,1fr)] gap-3">
                 <span className="text-gray-500 dark:text-[#8b949e]">调度规则</span>
                 <span className="break-all text-right font-medium text-gray-900 dark:text-[#f0f6fc]">{tooltip.task.cronExpr}</span>
               </div>
